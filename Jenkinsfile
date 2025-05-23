@@ -1,5 +1,5 @@
 /*
- * Jenkins CI/CD Pipeline for Task Management System
+ * Jenkins CI/CD Pipeline for Task Management System (Development Environment)
  * 
  * Author: Uttam Thakur
  * Course: CSY3056 - Development Operations and Software Testing
@@ -7,8 +7,12 @@
  * Date: 2025
  * 
  * This pipeline implements automated CI/CD for a Python Flask application
- * featuring branch-based environment detection, automated testing, security
- * scanning, and deployment with health verification.
+ * featuring automated testing, security scanning, and deployment to development environment.
+ * 
+ * NOTE: For other environments (staging, production), separate pipeline files are used:
+ * - Jenkinsfile_staging (deploys to staging environment)
+ * - Jenkinsfile_prod (deploys to production environment)
+ * This ensures environment-specific configurations and deployment strategies.
  */
 
 pipeline {
@@ -19,14 +23,10 @@ pipeline {
         APP_NAME = 'task-management-app'
         PYTHON_VERSION = '3.11'
         
-        // Environment-specific deployment paths
-        DEV_PATH = '/var/www/dev/task-management'
-        STAGING_PATH = '/var/www/staging/task-management'
-        PROD_PATH = '/var/www/prod/task-management'
-        
-        // Runtime variables (set dynamically based on branch)
-        DEPLOY_ENVIRONMENT = ''
-        DEPLOY_PORT = ''
+        // Fixed deployment configuration (development environment)
+        DEPLOY_PATH = '/var/www/dev/task-management'
+        DEPLOY_PORT = '8000'
+        FLASK_ENV = 'development'
     }
     
     // Automated triggers for continuous integration
@@ -37,7 +37,7 @@ pipeline {
     
     stages {
         
-        stage('Checkout and Environment Detection') {
+        stage('Checkout') {
             steps {
                 script {
                     // Clean workspace for consistent builds
@@ -46,26 +46,11 @@ pipeline {
                     // Checkout source code from SCM
                     checkout scm
                     
-                    // Extract Git information for environment detection
+                    // Extract Git information for logging
                     def gitCommit = sh(returnStdout: true, script: 'git rev-parse --short HEAD').trim()
                     def gitBranch = sh(returnStdout: true, script: 'git rev-parse --abbrev-ref HEAD').trim()
                     
-                    // Determine deployment environment based on Git branch
-                    // Production: main/master branches
-                    // Staging: develop/staging branches  
-                    // Development: all other branches
-                    if (gitBranch == 'main' || gitBranch == 'master') {
-                        env.DEPLOY_ENVIRONMENT = 'production'
-                        env.DEPLOY_PORT = '8002'
-                    } else if (gitBranch == 'develop' || gitBranch == 'staging') {
-                        env.DEPLOY_ENVIRONMENT = 'staging'
-                        env.DEPLOY_PORT = '8001'
-                    } else {
-                        env.DEPLOY_ENVIRONMENT = 'development'
-                        env.DEPLOY_PORT = '8000'
-                    }
-                    
-                    echo "Build: ${BUILD_NUMBER}, Branch: ${gitBranch}, Environment: ${env.DEPLOY_ENVIRONMENT}"
+                    echo "Build ${BUILD_NUMBER}: ${gitBranch}@${gitCommit} -> Development:8000"
                 }
             }
         }
@@ -89,8 +74,7 @@ pipeline {
                     // Verify environment setup
                     sh '''
                         . venv/bin/activate
-                        python --version
-                        pip list --format=freeze | wc -l
+                        echo "Python $(python --version | cut -d' ' -f2) with $(pip list --format=freeze | wc -l) packages installed"
                     '''
                 }
             }
@@ -144,15 +128,12 @@ pipeline {
                     '''
                 }
                 
-                // Archive coverage reports (works without additional plugins)
+                // Archive coverage reports
                 script {
                     // Archive HTML coverage report as build artifact
                     if (fileExists('htmlcov')) {
                         archiveArtifacts artifacts: 'htmlcov/**', fingerprint: true, allowEmptyArchive: true
-                        echo "Coverage report archived as build artifact"
-                        echo "Access via: ${BUILD_URL}artifact/htmlcov/index.html"
-                    } else {
-                        echo "Coverage HTML report not generated"
+                        echo "Coverage report archived at ${BUILD_URL}artifact/htmlcov/index.html"
                     }
                 }
             }
@@ -194,30 +175,30 @@ pipeline {
                         cp requirements.txt package/
                     '''
                     
-                    // Generate environment-specific startup script
-                    sh """
+                    // Generate startup script
+                    sh '''
                         cat > package/start.sh << 'EOF'
 #!/bin/bash
-# Startup script for application
+# Startup script for development environment
 
-# Use environment variables passed at runtime
-export FLASK_ENV=\${FLASK_ENV:-development}
-export PORT=\${PORT:-8000}
+export FLASK_ENV=development
+export PORT=8000
 
-echo "Starting application with FLASK_ENV=\$FLASK_ENV on PORT=\$PORT"
+echo "Starting Task Management App in development mode on port 8000"
 
 source venv/bin/activate
 python app.py
 EOF
                         chmod +x package/start.sh
-                    """
+                    '''
                     
-                    // Generate application stop script
+                    // Generate stop script
                     sh '''
-                        cat > package/stop.sh << EOF
+                        cat > package/stop.sh << 'EOF'
 #!/bin/bash
 # Stop script for application shutdown
 
+echo "Stopping Task Management App..."
 pkill -f "python.*app.py" || echo "No running application found"
 EOF
                         chmod +x package/stop.sh
@@ -232,68 +213,29 @@ EOF
         stage('Deployment') {
             steps {
                 script {
-                    // Determine deployment path based on environment
-                    def deployPath = ""
-                    switch(env.DEPLOY_ENVIRONMENT) {
-                        case 'development':
-                            deployPath = env.DEV_PATH
-                            break
-                        case 'staging':
-                            deployPath = env.STAGING_PATH
-                            break
-                        case 'production':
-                            deployPath = env.PROD_PATH
-                            break
-                        default:
-                            deployPath = env.DEV_PATH
-                            break
-                    }
+                    echo "Deploying to ${DEPLOY_PATH} on port ${DEPLOY_PORT}"
                     
-                    // Validate environment variables are set
-                    if (!env.DEPLOY_ENVIRONMENT || !env.DEPLOY_PORT) {
-                        error("Environment variables not properly set: DEPLOY_ENVIRONMENT=${env.DEPLOY_ENVIRONMENT}, DEPLOY_PORT=${env.DEPLOY_PORT}")
-                    }
-                    
-                    echo "Deploying to environment: ${env.DEPLOY_ENVIRONMENT}"
-                    echo "Target path: ${deployPath}"
-                    echo "Target port: ${env.DEPLOY_PORT}"
-                    
-                    // Execute deployment process with proper variable handling
-                    sh """
-                        # Set deployment variables
-                        DEPLOY_PATH="${deployPath}"
-                        TARGET_ENV="${env.DEPLOY_ENVIRONMENT}"
-                        TARGET_PORT="${env.DEPLOY_PORT}"
-                        
-                        echo "Starting deployment to: \$DEPLOY_PATH"
-                        echo "Environment: \$TARGET_ENV"
-                        echo "Port: \$TARGET_PORT"
-                        
+                    // Execute deployment process
+                    sh '''
                         # Create deployment directory
-                        mkdir -p "\$DEPLOY_PATH"
+                        mkdir -p "${DEPLOY_PATH}"
                         
                         # Stop existing application instance
-                        echo "Stopping existing application..."
                         pkill -f "python.*app.py" || true
-                        sleep 2
+                        sleep 3
                         
                         # Deploy application files
-                        echo "Deploying application files..."
-                        cp -r package/* "\$DEPLOY_PATH/"
-                        cp -r venv "\$DEPLOY_PATH/"
+                        cp -r package/* "${DEPLOY_PATH}/"
+                        cp -r venv "${DEPLOY_PATH}/"
                         
-                        # Start application with environment configuration
-                        echo "Starting application..."
-                        cd "\$DEPLOY_PATH"
-                        export FLASK_ENV="\$TARGET_ENV"
-                        export PORT="\$TARGET_PORT"
+                        # Start application
+                        cd "${DEPLOY_PATH}"
                         nohup ./start.sh > app.log 2>&1 &
                         
                         sleep 5
-                        echo "Deployment process completed"
-                    """
+                    '''
                     
-                    echo "Deployment completed: ${env.DEPLOY_ENVIRONMENT} environment on port ${env.DEPLOY_PORT}"
+                    echo "Application deployed successfully"
                 }
             }
         }
@@ -305,28 +247,27 @@ EOF
                     sh 'sleep 10'
                     
                     // Verify application health with retry logic
-                    sh """
+                    sh '''
                         for i in {1..5}; do
-                            if curl -s -f http://localhost:${env.DEPLOY_PORT}/health; then
+                            if curl -s -f http://localhost:8000/health; then
                                 echo "Health check passed"
                                 break
                             else
-                                echo "Health check attempt \$i failed"
-                                if [ \$i -eq 5 ]; then
+                                if [ $i -eq 5 ]; then
                                     echo "Health verification failed after 5 attempts"
                                     exit 1
                                 fi
                                 sleep 5
                             fi
                         done
-                    """
+                    '''
                     
                     // Verify API endpoints functionality
-                    sh """
-                        curl -s http://localhost:${env.DEPLOY_PORT}/tasks | head -c 100
-                    """
+                    sh '''
+                        curl -s http://localhost:8000/tasks | head -c 100
+                    '''
                     
-                    echo "Health verification completed successfully"
+                    echo "Health verification completed"
                 }
             }
         }
@@ -340,48 +281,18 @@ EOF
         
         success {
             script {
-                echo """
-                Deployment Summary:
-                - Build: ${BUILD_NUMBER}
-                - Environment: ${env.DEPLOY_ENVIRONMENT}
-                - Port: ${env.DEPLOY_PORT}
-                - URL: http://localhost:${env.DEPLOY_PORT}
-                """
+                echo "Deployment successful: Build ${BUILD_NUMBER} deployed to http://localhost:8000"
                 
-                // Send email notification if configured
-                try {
-                    mail to: 'devops@company.com',
-                         subject: "Deployment Success: ${APP_NAME} [${env.DEPLOY_ENVIRONMENT}] - Build ${BUILD_NUMBER}",
-                         body: """
-                         Deployment completed successfully.
-                         
-                         Environment: ${env.DEPLOY_ENVIRONMENT}
-                         Application URL: http://localhost:${env.DEPLOY_PORT}
-                         Build Details: ${BUILD_URL}
-                         """
-                } catch (Exception e) {
-                    echo "Email notification not configured"
                 }
             }
         }
         
         failure {
             script {
-                echo "Pipeline failed - Build ${BUILD_NUMBER}"
+                echo "Deployment failed: Build ${BUILD_NUMBER} - Check logs at ${BUILD_URL}console"
+
+                // Send email notification if configured, will implement when smtp is set up
                 
-                // Send failure notification if configured
-                try {
-                    mail to: 'devops@company.com',
-                         subject: "Deployment Failed: ${APP_NAME} [${env.DEPLOY_ENVIRONMENT}] - Build ${BUILD_NUMBER}",
-                         body: """
-                         Pipeline execution failed.
-                         
-                         Build Details: ${BUILD_URL}
-                         Environment: ${env.DEPLOY_ENVIRONMENT ?: 'Unknown'}
-                         """
-                } catch (Exception e) {
-                    echo "Email notification not configured"
-                }
             }
         }
         
