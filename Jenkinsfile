@@ -195,19 +195,22 @@ pipeline {
                     '''
                     
                     // Generate environment-specific startup script
-                    sh '''
-                        cat > package/start.sh << EOF
+                    sh """
+                        cat > package/start.sh << 'EOF'
 #!/bin/bash
-# Startup script for ${DEPLOY_ENVIRONMENT} environment
+# Startup script for application
 
-export FLASK_ENV=${DEPLOY_ENVIRONMENT}
-export PORT=${DEPLOY_PORT}
+# Use environment variables passed at runtime
+export FLASK_ENV=\${FLASK_ENV:-development}
+export PORT=\${PORT:-8000}
+
+echo "Starting application with FLASK_ENV=\$FLASK_ENV on PORT=\$PORT"
 
 source venv/bin/activate
 python app.py
 EOF
                         chmod +x package/start.sh
-                    '''
+                    """
                     
                     // Generate application stop script
                     sh '''
@@ -241,28 +244,53 @@ EOF
                         case 'production':
                             deployPath = env.PROD_PATH
                             break
+                        default:
+                            deployPath = env.DEV_PATH
+                            break
                     }
                     
-                    // Execute deployment process
+                    // Validate environment variables are set
+                    if (!env.DEPLOY_ENVIRONMENT || !env.DEPLOY_PORT) {
+                        error("Environment variables not properly set: DEPLOY_ENVIRONMENT=${env.DEPLOY_ENVIRONMENT}, DEPLOY_PORT=${env.DEPLOY_PORT}")
+                    }
+                    
+                    echo "Deploying to environment: ${env.DEPLOY_ENVIRONMENT}"
+                    echo "Target path: ${deployPath}"
+                    echo "Target port: ${env.DEPLOY_PORT}"
+                    
+                    // Execute deployment process with proper variable handling
                     sh """
+                        # Set deployment variables
+                        DEPLOY_PATH="${deployPath}"
+                        TARGET_ENV="${env.DEPLOY_ENVIRONMENT}"
+                        TARGET_PORT="${env.DEPLOY_PORT}"
+                        
+                        echo "Starting deployment to: \$DEPLOY_PATH"
+                        echo "Environment: \$TARGET_ENV"
+                        echo "Port: \$TARGET_PORT"
+                        
                         # Create deployment directory
-                        mkdir -p ${deployPath}
+                        mkdir -p "\$DEPLOY_PATH"
                         
                         # Stop existing application instance
+                        echo "Stopping existing application..."
                         pkill -f "python.*app.py" || true
                         sleep 2
                         
                         # Deploy application files
-                        cp -r package/* ${deployPath}/
-                        cp -r venv ${deployPath}/
+                        echo "Deploying application files..."
+                        cp -r package/* "\$DEPLOY_PATH/"
+                        cp -r venv "\$DEPLOY_PATH/"
                         
                         # Start application with environment configuration
-                        cd ${deployPath}
-                        export FLASK_ENV=${env.DEPLOY_ENVIRONMENT}
-                        export PORT=${env.DEPLOY_PORT}
+                        echo "Starting application..."
+                        cd "\$DEPLOY_PATH"
+                        export FLASK_ENV="\$TARGET_ENV"
+                        export PORT="\$TARGET_PORT"
                         nohup ./start.sh > app.log 2>&1 &
                         
                         sleep 5
+                        echo "Deployment process completed"
                     """
                     
                     echo "Deployment completed: ${env.DEPLOY_ENVIRONMENT} environment on port ${env.DEPLOY_PORT}"
