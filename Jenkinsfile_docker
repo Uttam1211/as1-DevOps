@@ -69,10 +69,16 @@ pipeline {
                 
                 // Validate project structure
                 sh '''
-                    required_files=("Dockerfile" "app.py" "requirements.txt" "test_app.py")
-                    for file in "${required_files[@]}"; do
-                        [ ! -f "$file" ] && echo "Missing: $file" && exit 1
+                    echo "Validating project structure..."
+                    
+                    # Check required files (POSIX shell compatible)
+                    for file in Dockerfile app.py requirements.txt test_app.py; do
+                        if [ ! -f "$file" ]; then
+                            echo "Missing: $file"
+                            exit 1
+                        fi
                     done
+                    
                     echo "Project structure validated"
                 '''
             }
