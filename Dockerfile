@@ -30,6 +30,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         curl \
         gcc \
+        netcat-openbsd \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements first for better Docker layer caching
@@ -59,5 +60,6 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 # Expose port
 EXPOSE ${PORT}
 
-# Define the command to run the application
-CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "4", "--timeout", "120", "app:create_app()"] 
+# For university project - use simple Python command for easier debugging
+# Production would use gunicorn
+CMD ["python", "app.py"] 
