@@ -24,7 +24,7 @@ pipeline {
     
     stages {
         
-        stage('1. Checkout Code') {
+        stage('Checkout Code') {
             steps {
                 echo "=== Checking out source code ==="
                 cleanWs()
@@ -48,7 +48,7 @@ pipeline {
             }
         }
         
-        stage('2. Build Docker Image') {
+        stage('Build Docker Image') {
             steps {
                 echo "=== Building Docker image ==="
                 sh '''
@@ -62,67 +62,27 @@ pipeline {
             }
         }
         
-        stage('3. Run Tests') {
+        stage('Run Tests') {
             steps {
-                echo "=== Preparing to run automated tests ==="
-                sh 'echo "JENKINS_AGENT_DEBUG: Current directory on agent is $(pwd)"'
-                sh 'echo "JENKINS_AGENT_DEBUG: WORKSPACE variable is ${WORKSPACE}"'
-                sh 'echo "JENKINS_AGENT_DEBUG: Listing contents of ${WORKSPACE} on agent:"'
-                sh 'ls -la ${WORKSPACE} || echo "JENKINS_AGENT_DEBUG: Failed to list ${WORKSPACE}"'
+                echo "=== Running tests inside Docker container ==="
                 sh '''
-                    if [ -f "${WORKSPACE}/test_app.py" ]; then
-                        echo "JENKINS_AGENT_DEBUG: test_app.py FOUND in ${WORKSPACE} on agent"
-                    else
-                        echo "JENKINS_AGENT_DEBUG: test_app.py NOT FOUND in ${WORKSPACE} on agent - THIS IS LIKELY THE PROBLEM!"
-                    fi
-                    if [ -f "${WORKSPACE}/app.py" ]; then
-                        echo "JENKINS_AGENT_DEBUG: app.py FOUND in ${WORKSPACE} on agent"
-                    else
-                        echo "JENKINS_AGENT_DEBUG: app.py NOT FOUND in ${WORKSPACE} on agent"
-                    fi
-                '''
-
-                echo "=== Running automated tests inside Docker container ==="
-                sh '''
-                    # Create reports directory
                     mkdir -p reports/tests
-                    
-                    # Run tests using the Docker image
-                    # Mount current directory and run tests directly
                     docker run --rm \
                         -v ${WORKSPACE}:/workspace \
                         -w /workspace \
                         ${DOCKER_IMAGE}:latest sh -c "
-                        
-                        # Show what files are available
-                        echo 'Available files:'
-                        ls -la
-                        
-                        # Install test dependencies
-                        pip install coverage
-                        
-                        # Run the tests
-                        echo 'Running unit tests...'
-                        python -m unittest test_app.py -v
-                        
-                        # Run coverage analysis
-                        echo 'Running coverage analysis...'
-                        python -m coverage run --source=. test_app.py || echo "Coverage run failed"
-                        python -m coverage report -m || echo "Coverage report failed"
-                        
-                        # Generate coverage HTML report
-                        python -m coverage html -d reports/tests/coverage || echo "Coverage HTML generation failed"
-                        
-                        echo 'Tests completed!'
-                    "
+                            pip install coverage
+                            python -m unittest test_app.py -v
+                            python -m coverage run --source=. test_app.py || echo 'Coverage run failed'
+                            python -m coverage report -m || echo 'Coverage report failed'
+                            python -m coverage html -d reports/tests/coverage || echo 'Coverage HTML generation failed'
+                        "
                 '''
-                
-                // Archive test results
                 archiveArtifacts artifacts: 'reports/tests/**', allowEmptyArchive: true
             }
         }
         
-        stage('4. Code Quality Check') {
+        stage('Code Quality') {
             steps {
                 echo "=== Running code quality checks ==="
                 sh '''
@@ -145,7 +105,7 @@ pipeline {
             }
         }
         
-        stage('5. Deploy Application') {
+        stage('Deploy') {
             steps {
                 echo "=== Deploying application ==="
                 sh '''
@@ -180,7 +140,7 @@ pipeline {
                     # Run the new container
                     docker run -d \
                         --name ${CONTAINER_NAME} \
-                        -p ${HOST_PORT}:${CONTAINER_PORT} \
+                        --network host \
                         -e FLASK_ENV=staging \
                         ${DOCKER_IMAGE}:${BUILD_NUMBER}
                     
@@ -193,7 +153,7 @@ pipeline {
             }
         }
         
-        stage('6. Health Check') {
+        stage('Health Check') {
             steps {
                 echo "=== Verifying application health ==="
                 sh '''
@@ -218,14 +178,14 @@ pipeline {
                         
                         # Check if we can reach the health endpoint
                         # Using host.docker.internal to reach the host from Jenkins container
-                        if curl -f -s http://host.docker.internal:${HOST_PORT}/health; then
-                            echo "✓ Health check passed using host.docker.internal!"
+                        if curl -f -s http://localhost:${HOST_PORT}/health; then
+                            echo "✓ Health check passed!"
                             
                             # Test API functionality
                             echo "Testing task creation..."
                             curl -X POST -H "Content-Type: application/json" \
                                 -d '{"title":"Test Task","description":"Automated test"}' \
-                                http://host.docker.internal:${HOST_PORT}/tasks
+                                http://localhost:${HOST_PORT}/tasks
                             
                             echo "✓ Application deployed successfully!"
                             exit 0
