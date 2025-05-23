@@ -67,9 +67,39 @@ pipeline {
         stage('Docker Environment Setup') {
             steps {
                 script {
-                    // Verify Docker installation and connectivity
-                    sh 'docker --version'
-                    sh 'docker info'
+                    // Check Docker installation and permissions
+                    sh '''
+                        echo "Checking Docker installation..."
+                        docker --version || {
+                            echo "ERROR: Docker is not installed or not in PATH"
+                            exit 1
+                        }
+                    '''
+                    
+                    // Check Docker daemon access with proper error handling
+                    sh '''
+                        echo "Checking Docker daemon access..."
+                        if ! docker info >/dev/null 2>&1; then
+                            echo "ERROR: Cannot connect to Docker daemon"
+                            echo "This usually means Jenkins user needs to be added to docker group"
+                            echo ""
+                            echo "To fix this issue, run the following commands on your Jenkins server:"
+                            echo "1. sudo usermod -aG docker jenkins"
+                            echo "2. sudo systemctl restart jenkins"
+                            echo "3. Or restart Jenkins service"
+                            echo ""
+                            echo "Alternative: Run Jenkins with Docker socket mounted:"
+                            echo "docker run -v /var/run/docker.sock:/var/run/docker.sock ..."
+                            echo ""
+                            echo "Current user: $(whoami)"
+                            echo "Docker socket permissions:"
+                            ls -la /var/run/docker.sock 2>/dev/null || echo "Docker socket not found"
+                            echo "User groups:"
+                            groups 2>/dev/null || echo "Cannot check groups"
+                            exit 1
+                        fi
+                        echo "Docker daemon access confirmed"
+                    '''
                     
                     // Create Docker network if it doesn't exist
                     sh '''
