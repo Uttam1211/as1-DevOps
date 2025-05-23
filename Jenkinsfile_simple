@@ -66,15 +66,19 @@ pipeline {
             steps {
                 sh '''
                     mkdir -p reports/tests/coverage
+                    # Fix permissions issue by ensuring the workspace is writable
                     docker run --rm \
                         -v ${WORKSPACE}:/workspace \
                         -w /workspace \
                         ${DOCKER_IMAGE}:${BUILD_NUMBER} \
                         sh -c "
+                            # Make sure we have permission to write to the workspace
+                            chmod -R 777 /workspace &&
                             pip install coverage &&
-                            coverage run --source=. -m unittest discover -v &&
-                            coverage report -m &&
-                            coverage html -d reports/tests/coverage
+                            # Use a specific coverage data file path with permissions
+                            coverage run --source=. --data-file=/workspace/.coverage -m unittest discover -v &&
+                            coverage report -m --data-file=/workspace/.coverage &&
+                            coverage html -d reports/tests/coverage --data-file=/workspace/.coverage
                         "
                 '''
                 archiveArtifacts artifacts: 'reports/tests/**', allowEmptyArchive: true
