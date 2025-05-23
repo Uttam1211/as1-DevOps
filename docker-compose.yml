@@ -1,7 +1,7 @@
 # Docker Compose Configuration for Task Management System
-# Author: Student Name
+# Author: Uttam Thakur
 # Purpose: Multi-environment Docker orchestration
-# Date: 2024
+# Date: 2025
 # Description: Compose file for development, testing, and local deployment
 
 version: "3.8"

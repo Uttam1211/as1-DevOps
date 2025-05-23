@@ -1,7 +1,7 @@
 # Flask Application Dependencies
-# Author: Student Name
+# Author: Uttam Thakur
 # Purpose: Task Management System Dependencies
-# Date: 2024
+# Date: 2025
 
 # Core Flask framework
 Flask==2.3.3

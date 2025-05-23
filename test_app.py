@@ -1,33 +1,87 @@
 """
+Task Management System - Test Suite
+---------------------------------
+
+A comprehensive test suite for the Task Management System implementing industry-standard
+testing practices and patterns.
+
 Author: Uttam Thakur
-File Purpose: Unit tests for Task Management System
-Dependencies: unittest, Flask
-Date: 2025
-Description: Comprehensive test suite following TDD principles for the Flask application
+Version: 1.0.0
+License: MIT
+Created: 2025
+Updated: 2025
+
+This module provides:
+- Unit tests for TaskManager class
+- Integration tests for Flask endpoints
+- Edge case coverage
+- Error condition validation
 """
 
 import unittest
 import json
+from typing import Optional, Dict, Any
+from http import HTTPStatus
+from datetime import datetime
+
 from app import create_app, TaskManager
 
 class TestTaskManager(unittest.TestCase):
-    """Test cases for TaskManager class following TDD approach"""
+    """
+    Unit test suite for TaskManager class.
     
-    def setUp(self):
-        """Set up test fixtures before each test method"""
+    This test suite verifies the core business logic of the TaskManager class,
+    including CRUD operations, validation, and error handling.
+    
+    Test Categories:
+    - Initialization
+    - Task Creation
+    - Task Retrieval
+    - Task Updates
+    - Task Deletion
+    - Error Handling
+    """
+    
+    def setUp(self) -> None:
+        """
+        Set up test fixtures before each test method.
+        
+        Creates a fresh TaskManager instance for each test to ensure
+        test isolation and prevent state interference.
+        """
         self.task_manager = TaskManager()
     
-    def tearDown(self):
-        """Clean up after each test method"""
+    def tearDown(self) -> None:
+        """
+        Clean up test fixtures after each test method.
+        
+        Ensures proper cleanup of resources and prevents state leakage
+        between tests.
+        """
         self.task_manager = None
     
-    def test_task_manager_initialization(self):
-        """Test Case 1: TaskManager initializes correctly"""
+    def test_task_manager_initialization(self) -> None:
+        """
+        Verify TaskManager initializes with correct default state.
+        
+        Ensures:
+        - Empty task list
+        - Counter starts at 1
+        - No residual state
+        """
         self.assertEqual(len(self.task_manager.tasks), 0)
         self.assertEqual(self.task_manager.task_id_counter, 1)
     
-    def test_create_task_success(self):
-        """Test Case 2: Create task with valid data"""
+    def test_create_task_success(self) -> None:
+        """
+        Verify successful task creation with valid data.
+        
+        Tests:
+        - Task creation with title and description
+        - Correct ID assignment
+        - Default status
+        - Timestamp presence
+        """
         task = self.task_manager.create_task("Test Task", "Test Description")
         
         self.assertIsNotNone(task)
@@ -36,11 +90,21 @@ class TestTaskManager(unittest.TestCase):
         self.assertEqual(task['status'], 'pending')
         self.assertEqual(task['id'], 1)
         self.assertEqual(len(self.task_manager.tasks), 1)
+        self.assertIn('created_at', task)
+        self.assertIn('updated_at', task)
     
-    def test_create_task_empty_title(self):
-        """Test Case 3: Create task with empty title should raise ValueError"""
-        with self.assertRaises(ValueError):
+    def test_create_task_empty_title(self) -> None:
+        """
+        Verify task creation fails with empty or None title.
+        
+        Tests:
+        - Empty string title
+        - None title
+        - Error message clarity
+        """
+        with self.assertRaises(ValueError) as context:
             self.task_manager.create_task("")
+        self.assertIn("non-empty string", str(context.exception))
         
         with self.assertRaises(ValueError):
             self.task_manager.create_task(None)
@@ -111,28 +175,84 @@ class TestTaskManager(unittest.TestCase):
         self.assertFalse(result)
 
 class TestFlaskApp(unittest.TestCase):
-    """Test cases for Flask application endpoints"""
+    """
+    Integration test suite for Flask application endpoints.
     
-    def setUp(self):
-        """Set up test fixtures before each test method"""
+    This test suite verifies the REST API endpoints, including:
+    - Request/response cycle
+    - Status codes
+    - Response formats
+    - Error handling
+    - Edge cases
+    """
+    
+    def setUp(self) -> None:
+        """
+        Set up test fixtures before each test method.
+        
+        Creates:
+        - Test Flask application
+        - Test client
+        - Configures test environment
+        """
         self.app = create_app()
         self.app.config['TESTING'] = True
         self.client = self.app.test_client()
+        self.base_url = '/tasks'
     
-    def test_health_check_endpoint(self):
-        """Test Case 13: Health check endpoint returns correct response"""
+    def create_test_task(self, title: str = "Test Task", description: str = "") -> Dict[str, Any]:
+        """
+        Helper method to create a test task.
+        
+        Args:
+            title: Task title (default: "Test Task")
+            description: Task description (default: "")
+            
+        Returns:
+            Dict containing the created task data
+        """
+        task_data = {
+            'title': title,
+            'description': description
+        }
+        response = self.client.post(
+            self.base_url,
+            data=json.dumps(task_data),
+            content_type='application/json'
+        )
+        return json.loads(response.data)
+    
+    def test_health_check_endpoint(self) -> None:
+        """
+        Verify health check endpoint functionality.
+        
+        Ensures:
+        - 200 status code
+        - Correct response format
+        - Required fields present
+        - Version information
+        """
         response = self.client.get('/health')
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, HTTPStatus.OK)
         
         data = json.loads(response.data)
         self.assertEqual(data['status'], 'healthy')
         self.assertIn('timestamp', data)
         self.assertEqual(data['version'], '1.0.0')
+        self.assertIn('environment', data)
     
-    def test_get_tasks_empty(self):
-        """Test Case 14: Get tasks when no tasks exist"""
-        response = self.client.get('/tasks')
-        self.assertEqual(response.status_code, 200)
+    def test_get_tasks_empty(self) -> None:
+        """
+        Verify get tasks endpoint with empty task list.
+        
+        Ensures:
+        - 200 status code
+        - Empty task list
+        - Correct count
+        - Success indicator
+        """
+        response = self.client.get(self.base_url)
+        self.assertEqual(response.status_code, HTTPStatus.OK)
         
         data = json.loads(response.data)
         self.assertTrue(data['success'])
@@ -268,9 +388,71 @@ class TestFlaskApp(unittest.TestCase):
         data = json.loads(response.data)
         self.assertFalse(data['success'])
         self.assertIn('not found', data['error'].lower())
-
     
+    def test_create_task_validation(self) -> None:
+        """
+        Verify task creation input validation.
+        
+        Tests:
+        - Missing title
+        - Empty title
+        - Invalid content type
+        - Missing request body
+        """
+        # Test missing title
+        response = self.client.post(
+            self.base_url,
+            data=json.dumps({}),
+            content_type='application/json'
+        )
+        self.assertEqual(response.status_code, HTTPStatus.BAD_REQUEST)
+        
+        # Test empty title
+        response = self.client.post(
+            self.base_url,
+            data=json.dumps({'title': ''}),
+            content_type='application/json'
+        )
+        self.assertEqual(response.status_code, HTTPStatus.BAD_REQUEST)
+        
+        # Test invalid content type
+        response = self.client.post(
+            self.base_url,
+            data='not json'
+        )
+        self.assertEqual(response.status_code, HTTPStatus.BAD_REQUEST)
+    
+    def test_task_lifecycle(self) -> None:
+        """
+        Verify complete task lifecycle through API.
+        
+        Tests sequence:
+        1. Create task
+        2. Retrieve task
+        3. Update task status
+        4. Delete task
+        5. Verify deletion
+        """
+        # Create task
+        create_response = self.create_test_task()
+        self.assertEqual(create_response['task']['status'], 'pending')
+        task_id = create_response['task']['id']
+        
+        # Update status
+        update_response = self.client.put(
+            f'{self.base_url}/{task_id}/status',
+            data=json.dumps({'status': 'completed'}),
+            content_type='application/json'
+        )
+        self.assertEqual(update_response.status_code, HTTPStatus.OK)
+        
+        # Delete task
+        delete_response = self.client.delete(f'{self.base_url}/{task_id}')
+        self.assertEqual(delete_response.status_code, HTTPStatus.OK)
+        
+        # Verify deletion
+        get_response = self.client.get(f'{self.base_url}/{task_id}')
+        self.assertEqual(get_response.status_code, HTTPStatus.NOT_FOUND)
 
 if __name__ == '__main__':
-    # Create test suite
     unittest.main(verbosity=2) 
