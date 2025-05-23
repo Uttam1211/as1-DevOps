@@ -64,19 +64,19 @@ pipeline {
         
         stage('Run Tests') {
             steps {
-                echo "=== Running tests inside Docker container ==="
+                script {
+                // build as before  
+                docker.build("${DOCKER_IMAGE}:${BUILD_NUMBER}", "--no-cache .")
+                }
                 sh '''
-                    mkdir -p reports/tests
-                    docker run --rm \
-                        -v ${WORKSPACE}:/workspace \
-                        -w /workspace \
-                        ${DOCKER_IMAGE}:latest sh -c "
-                            pip install coverage
-                            python -m unittest test_app.py -v
-                            python -m coverage run --source=. test_app.py || echo 'Coverage run failed'
-                            python -m coverage report -m || echo 'Coverage report failed'
-                            python -m coverage html -d reports/tests/coverage || echo 'Coverage HTML generation failed'
-                        "
+                docker run --rm \
+                    ${DOCKER_IMAGE}:${BUILD_NUMBER} \
+                    sh -c "
+                    pip install coverage &&
+                    coverage run --source=. -m unittest discover -v &&
+                    coverage report -m &&
+                    coverage html -d reports/tests/coverage
+                    "
                 '''
                 archiveArtifacts artifacts: 'reports/tests/**', allowEmptyArchive: true
             }
@@ -155,55 +155,21 @@ pipeline {
         
         stage('Health Check') {
             steps {
-                echo "=== Verifying application health ==="
+                echo "Waiting for app to come up…"
+                sleep 10
                 sh '''
-                    # Wait for application to start
-                    echo "Waiting for application to start..."
-                    sleep 10
-                    
-                    # Check container status
-                    echo "Container status:"
-                    docker ps | grep ${CONTAINER_NAME}
-                    
-                    # Check container logs
-                    echo "Container logs:"
-                    docker logs ${CONTAINER_NAME} --tail 10
-                    
-                    # Check if port is accessible from host
-                    echo "Testing connectivity on host port ${HOST_PORT}..."
-                    
-                    # Try health check multiple times
-                    for i in 1 2 3 4 5; do
-                        echo "Health check attempt $i/5..."
-                        
-                        # Check if we can reach the health endpoint
-                        # Using host.docker.internal to reach the host from Jenkins container
-                        if curl -f -s http://localhost:${HOST_PORT}/health; then
-                            echo "✓ Health check passed!"
-                            
-                            # Test API functionality
-                            echo "Testing task creation..."
-                            curl -X POST -H "Content-Type: application/json" \
-                                -d '{"title":"Test Task","description":"Automated test"}' \
-                                http://localhost:${HOST_PORT}/tasks
-                            
-                            echo "✓ Application deployed successfully!"
-                            exit 0
-                        else
-                            echo "✗ Health check failed, attempt $i"
-                            if [ $i -eq 5 ]; then
-                                echo "Final attempt failed. Deployment unsuccessful."
-                                echo "Final container status:"
-                                docker ps -a | grep ${CONTAINER_NAME}
-                                echo "Final container logs:"
-                                docker logs ${CONTAINER_NAME}
-                                echo "Port status:"
-                                netstat -tlnp | grep ${HOST_PORT} || echo "Port not in use"
-                                exit 1
-                            fi
-                            sleep 5
-                        fi
-                    done
+                for i in $(seq 1 5); do
+                    if docker exec ${CONTAINER_NAME} curl -f http://localhost:${CONTAINER_PORT}/health; then
+                    echo "✓ Health check passed!"
+                    exit 0
+                    else
+                    echo "✗ health check attempt $i/5 failed"
+                    sleep 5
+                    fi
+                done
+                echo "❌ Health check failed after 5 attempts"
+                docker logs ${CONTAINER_NAME} --tail 50
+                exit 1
                 '''
             }
         }
