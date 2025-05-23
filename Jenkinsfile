@@ -1,65 +1,52 @@
 /*
- * Jenkins Pipeline for Task Management System
+ * Simple Jenkins Pipeline for Task Management System (Python Only)
  * Author: Uttam Thakur
- * Purpose: Automated CI/CD pipeline for Flask application
+ * Purpose: Basic CI/CD pipeline for Flask application without Docker
  * Date: 2025
- * Description: Complete pipeline with build, test, containerization, and deployment stages
+ * Description: Simplified pipeline with essential stages for Python development
  */
 
 pipeline {
-    agent any // this can be changed to a specific agent if needed under settings
+    agent any
     
     // Define environment variables
     environment {
-        // Docker configuration
-        DOCKER_IMAGE = 'task-management-system'
-        DOCKER_TAG = "${BUILD_NUMBER}"
-        DOCKER_REGISTRY = 'localhost:8000'  // Local registry for demonstration
-        
         // Application configuration
         APP_NAME = 'task-management-app'
         APP_PORT = '8000'
+        PYTHON_VERSION = '3.11'
         
-        // Testing configuration
-        PYTHON_VERSION = '3.11' // to preserve the python version for the pipeline
-        
-        // Credentials (stored in Jenkins credentials store)
-        DOCKER_CREDENTIALS = credentials('docker-registry-credentials')
+        // Deployment paths
+        DEV_PATH = '/var/www/dev/task-management'
+        STAGING_PATH = '/var/www/staging/task-management'
+        PROD_PATH = '/var/www/prod/task-management'
     }
     
-    // Define build parameters
+    // Build parameters
     parameters {
         choice(
-            name: 'DEPLOYMENT_ENVIRONMENT',
+            name: 'ENVIRONMENT',
             choices: ['development', 'staging', 'production'],
             description: 'Select deployment environment'
         )
         booleanParam(
             name: 'SKIP_TESTS',
             defaultValue: false,
-            description: 'Skip test execution (not recommended for production)'
+            description: 'Skip test execution'
         )
         booleanParam(
-            name: 'DEPLOY_APPLICATION',
+            name: 'DEPLOY_APP',
             defaultValue: true,
-            description: 'Deploy application after successful build and test'
+            description: 'Deploy application after successful build'
         )
-    }
-    
-    // Configure build triggers
-    triggers {
-        // Poll SCM every 5 minutes for changes
-        pollSCM('H/5 * * * *')
-        // Trigger build on webhook
-        githubPush()
     }
     
     stages {
-        stage('Checkout') {
+        stage('1. Checkout') {
             steps {
                 echo "🔄 Starting CI/CD Pipeline for ${APP_NAME}"
                 echo "📋 Build Number: ${BUILD_NUMBER}"
-                echo "🎯 Target Environment: ${params.DEPLOYMENT_ENVIRONMENT}"
+                echo "🎯 Target Environment: ${params.ENVIRONMENT}"
                 
                 // Clean workspace and checkout code
                 cleanWs()
@@ -67,7 +54,7 @@ pipeline {
                 
                 // Display Git information
                 script {
-                    def gitCommit = sh(returnStdout: true, script: 'git rev-parse HEAD').trim()
+                    def gitCommit = sh(returnStdout: true, script: 'git rev-parse --short HEAD').trim()
                     def gitBranch = sh(returnStdout: true, script: 'git rev-parse --abbrev-ref HEAD').trim()
                     echo "📂 Git Commit: ${gitCommit}"
                     echo "🌿 Git Branch: ${gitBranch}"
@@ -75,286 +62,259 @@ pipeline {
             }
         }
         
-        stage('Environment Setup') {
+        stage('2. Environment Setup') {
             steps {
-                echo "🔧 Setting up Python environment"
+                echo "🔧 Setting up Python virtual environment"
                 
                 sh '''
-                    # Create virtual environment
+                    # Remove existing virtual environment if it exists
+                    rm -rf venv
+                    
+                    # Create fresh virtual environment
                     python3 -m venv venv
                     
-                    # Activate virtual environment and install dependencies
+                    # Activate virtual environment and upgrade pip
                     . venv/bin/activate
                     pip install --upgrade pip
+                    
+                    # Install project dependencies
                     pip install -r requirements.txt
                     
                     # Verify installation
+                    echo "Python version:"
                     python --version
+                    echo "Installed packages:"
                     pip list
                 '''
             }
         }
         
-        stage('Code Quality & Security Scan') {
-            parallel {
-                stage('Lint Code') {
-                    steps {
-                        echo "🔍 Running code quality checks"
-                        
-                        sh '''
-                            . venv/bin/activate
-                            
-                            # Install linting tools
-                            pip install flake8 pylint
-                            
-                            # Run flake8 for PEP8 compliance
-                            echo "Running flake8..."
-                            flake8 app.py test_app.py --max-line-length=100 --statistics
-                            
-                            # Run pylint for code quality
-                            echo "Running pylint..."
-                            pylint app.py --disable=missing-docstring,too-few-public-methods || true
-                        '''
-                    }
-                }
+        stage('3. Code Quality Check') {
+            steps {
+                echo "🔍 Running code quality checks"
                 
-                stage('Security Scan') {
-                    steps {
-                        echo "🔒 Running security vulnerability scan"
-                        
-                        sh '''
-                            . venv/bin/activate
-                            
-                            # Install security scanning tools
-                            pip install safety bandit
-                            
-                            # Check for known security vulnerabilities in dependencies
-                            echo "Checking dependencies for security vulnerabilities..."
-                            safety check || true
-                            
-                            # Static security analysis
-                            echo "Running bandit security scan..."
-                            bandit -r app.py || true
-                        '''
-                    }
-                }
+                sh '''
+                    # Activate virtual environment
+                    . venv/bin/activate
+                    
+                    # Install code quality tools
+                    pip install flake8 pylint
+                    
+                    # Run flake8 for PEP8 compliance
+                    echo "Running flake8 code style check..."
+                    flake8 app.py test_app.py --max-line-length=100 --statistics || true
+                    
+                    # Run basic pylint check
+                    echo "Running pylint code quality check..."
+                    pylint app.py --disable=missing-docstring,too-few-public-methods --score=yes || true
+                '''
             }
         }
         
-        stage('Unit Testing') {
+        stage('4. Unit Testing') {
             when {
                 not { params.SKIP_TESTS }
             }
             steps {
-                echo "🧪 Running unit tests with coverage analysis"
+                echo "🧪 Running unit tests"
                 
                 sh '''
+                    # Activate virtual environment
                     . venv/bin/activate
                     
-                    # Run unit tests with coverage
+                    # Install testing tools
+                    pip install coverage
+                    
+                    # Run unit tests with verbose output
                     echo "Running unit tests..."
-                    python -m coverage run -m unittest test_app.py -v
+                    python -m unittest test_app.py -v
                     
-                    # Generate coverage report
+                    # Run tests with coverage
+                    echo "Running coverage analysis..."
+                    python -m coverage run -m unittest test_app.py
                     python -m coverage report -m
-                    python -m coverage html
                     
-                    # Generate XML coverage report for Jenkins
-                    python -m coverage xml
+                    # Generate HTML coverage report
+                    python -m coverage html
                 '''
                 
-                // Archive test results
+                // Publish HTML coverage report
                 publishHTML([
                     allowMissing: false,
                     alwaysLinkToLastBuild: true,
                     keepAll: true,
                     reportDir: 'htmlcov',
                     reportFiles: 'index.html',
-                    reportName: 'Coverage Report'
+                    reportName: 'Test Coverage Report'
                 ])
             }
-            post {
-                always {
-                    // Publish test results
-                    junit allowEmptyResults: true, testResults: 'test-results.xml'
-                    
-                    // Archive coverage data
-                    publishCoverage adapters: [
-                        coberturaAdapter('coverage.xml')
-                    ], sourceFileResolver: sourceFiles('STORE_LAST_BUILD')
-                }
-            }
         }
         
-        stage('Build Docker Image') {
+        stage('5. Security Scan') {
             steps {
-                echo "🐳 Building Docker image"
+                echo "🔒 Running security vulnerability scan"
                 
-                script {
-                    // Build Docker image with multiple tags
-                    def dockerImage = docker.build("${DOCKER_IMAGE}:${DOCKER_TAG}")
-                    docker.build("${DOCKER_IMAGE}:latest")
+                sh '''
+                    # Activate virtual environment
+                    . venv/bin/activate
                     
-                    // Tag for registry
-                    sh "docker tag ${DOCKER_IMAGE}:${DOCKER_TAG} ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${DOCKER_TAG}"
-                    sh "docker tag ${DOCKER_IMAGE}:latest ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:latest"
+                    # Install security tools
+                    pip install safety bandit
                     
-                    echo "✅ Docker image built successfully"
-                }
+                    # Check for known vulnerabilities in dependencies
+                    echo "Checking dependencies for security vulnerabilities..."
+                    safety check || true
+                    
+                    # Run bandit for security issues in code
+                    echo "Running bandit security scan..."
+                    bandit -r app.py -f txt || true
+                '''
             }
         }
         
-        stage('Container Security Scan') {
+        stage('6. Package Application') {
             steps {
-                echo "🔒 Scanning Docker image for vulnerabilities"
+                echo "📦 Packaging application for deployment"
                 
-                script {
-                    // Scan Docker image for vulnerabilities (using a mock scan for demonstration)
-                    sh '''
-                        echo "Running container security scan..."
-                        # In a real environment, you would use tools like:
-                        # docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy image ${DOCKER_IMAGE}:${DOCKER_TAG}
-                        echo "✅ Container security scan completed"
-                    '''
-                }
+                sh '''
+                    # Create deployment package
+                    echo "Creating deployment package..."
+                    
+                    # Create package directory
+                    mkdir -p package
+                    
+                    # Copy application files
+                    cp app.py package/
+                    cp requirements.txt package/
+                    
+                    # Create startup script
+                    cat > package/start.sh << 'EOF'
+#!/bin/bash
+# Startup script for Task Management System
+
+# Activate virtual environment
+source venv/bin/activate
+
+# Start the application
+echo "Starting Task Management System..."
+python app.py
+EOF
+                    
+                    chmod +x package/start.sh
+                    
+                    echo "✅ Application packaged successfully"
+                '''
+                
+                // Archive the package
+                archiveArtifacts artifacts: 'package/**', fingerprint: true
             }
         }
         
-        stage('Integration Testing') {
+        stage('7. Deploy Application') {
             when {
-                not { params.SKIP_TESTS }
+                expression { params.DEPLOY_APP }
             }
             steps {
-                echo "🧪 Running integration tests against containerized application"
+                echo "🚀 Deploying application to ${params.ENVIRONMENT} environment"
                 
                 script {
-                    try {
-                        // Start container for testing
-                        sh '''
-                            docker run -d --name test-container-${BUILD_NUMBER} \
-                                -p 5001:8000 \
-                                ${DOCKER_IMAGE}:${DOCKER_TAG}
-                                
-                            # Wait for container to be ready
-                            sleep 10
-                            
-                            # Test health endpoint
-                            curl -f http://localhost:5001/health || exit 1
-                            
-                            # Test API endpoints
-                            echo "Testing API endpoints..."
-                            
-                            # Test GET /tasks
-                            curl -X GET http://localhost:5001/tasks
-                            
-                            # Test POST /tasks
-                            curl -X POST http://localhost:5001/tasks \
-                                -H "Content-Type: application/json" \
-                                -d '{"title": "Integration Test Task", "description": "Test description"}'
-                            
-                            echo "✅ Integration tests passed"
-                        '''
-                    } finally {
-                        // Clean up test container
-                        sh 'docker stop test-container-${BUILD_NUMBER} || true'
-                        sh 'docker rm test-container-${BUILD_NUMBER} || true'
-                    }
-                }
-            }
-        }
-        
-        stage('Push to Registry') {
-            when {
-                anyOf {
-                    branch 'main'
-                    branch 'develop'
-                    expression { params.DEPLOYMENT_ENVIRONMENT == 'production' }
-                }
-            }
-            steps {
-                echo "📤 Pushing Docker image to registry"
-                
-                script {
-                    // Push to Docker registry
-                    docker.withRegistry("http://${DOCKER_REGISTRY}", 'docker-registry-credentials') {
-                        sh "docker push ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${DOCKER_TAG}"
-                        sh "docker push ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:latest"
-                    }
-                    
-                    echo "✅ Docker image pushed to registry successfully"
-                }
-            }
-        }
-        
-        stage('Deploy Application') {
-            when {
-                expression { params.DEPLOY_APPLICATION }
-            }
-            steps {
-                echo "🚀 Deploying application to ${params.DEPLOYMENT_ENVIRONMENT} environment"
-                
-                script {
-                    def deploymentPort = 8000
+                    def deployPath = ""
+                    def deployPort = ""
                     
                     // Set environment-specific configurations
-                    switch(params.DEPLOYMENT_ENVIRONMENT) {
+                    switch(params.ENVIRONMENT) {
                         case 'development':
-                            deploymentPort = 8000
+                            deployPath = env.DEV_PATH
+                            deployPort = '8000'
                             break
                         case 'staging':
-                            deploymentPort = 8001
+                            deployPath = env.STAGING_PATH
+                            deployPort = '8001'
                             break
                         case 'production':
-                            deploymentPort = 8002
+                            deployPath = env.PROD_PATH
+                            deployPort = '8002'
                             break
                     }
                     
                     sh """
-                        # Stop existing container if running
-                        docker stop ${APP_NAME}-${params.DEPLOYMENT_ENVIRONMENT} || true
-                        docker rm ${APP_NAME}-${params.DEPLOYMENT_ENVIRONMENT} || true
+                        echo "Deploying to: ${deployPath}"
+                        echo "Port: ${deployPort}"
                         
-                        # Deploy new container
-                        docker run -d \
-                            --name ${APP_NAME}-${params.DEPLOYMENT_ENVIRONMENT} \
-                            -p ${deploymentPort}:8000 \
-                            --restart unless-stopped \
-                            -e FLASK_ENV=${params.DEPLOYMENT_ENVIRONMENT} \
-                            ${DOCKER_IMAGE}:${DOCKER_TAG}
+                        # Create deployment directory if it doesn't exist
+                        mkdir -p ${deployPath}
                         
-                        # Verify deployment
-                        sleep 10
-                        curl -f http://localhost:${deploymentPort}/health
+                        # Stop existing application (if running)
+                        echo "Stopping existing application..."
+                        pkill -f "python.*app.py" || true
+                        sleep 2
                         
-                        echo "✅ Application deployed successfully on port ${deploymentPort}"
+                        # Copy application files to deployment directory
+                        echo "Copying application files..."
+                        cp -r package/* ${deployPath}/
+                        cp -r venv ${deployPath}/
+                        
+                        # Set up environment variables
+                        cd ${deployPath}
+                        export FLASK_ENV=${params.ENVIRONMENT}
+                        export PORT=${deployPort}
+                        
+                        # Start application in background
+                        echo "Starting application..."
+                        nohup ./start.sh > app.log 2>&1 &
+                        
+                        # Wait for application to start
+                        sleep 5
+                        
+                        echo "✅ Application deployed successfully"
+                        echo "🌐 Application should be available at: http://localhost:${deployPort}"
                     """
                 }
             }
         }
         
-        stage('Smoke Tests') {
+        stage('8. Health Check') {
             when {
-                expression { params.DEPLOY_APPLICATION }
+                expression { params.DEPLOY_APP }
             }
             steps {
-                echo "💨 Running smoke tests on deployed application"
+                echo "🏥 Performing health check on deployed application"
                 
                 script {
-                    def deploymentPort = params.DEPLOYMENT_ENVIRONMENT == 'production' ? 8002 : 
-                                       params.DEPLOYMENT_ENVIRONMENT == 'staging' ? 8001 : 8000
+                    def deployPort = params.ENVIRONMENT == 'production' ? '8002' : 
+                                   params.ENVIRONMENT == 'staging' ? '8001' : '8000'
                     
                     sh """
-                        # Basic functionality tests
-                        echo "Testing deployed application..."
+                        # Wait for application to be fully ready
+                        sleep 10
                         
-                        # Health check
-                        curl -f http://localhost:${deploymentPort}/health
+                        # Check if application is responding
+                        echo "Testing health endpoint..."
                         
-                        # Test core API functionality
-                        response=\$(curl -s -X GET http://localhost:${deploymentPort}/tasks)
-                        echo "API Response: \$response"
+                        # Try health check endpoint (with retry)
+                        for i in {1..5}; do
+                            if curl -s -f http://localhost:${deployPort}/health; then
+                                echo ""
+                                echo "✅ Health check passed!"
+                                break
+                            else
+                                echo "Health check attempt \$i failed, retrying..."
+                                sleep 5
+                            fi
+                            
+                            if [ \$i -eq 5 ]; then
+                                echo "❌ Health check failed after 5 attempts"
+                                exit 1
+                            fi
+                        done
                         
-                        echo "✅ Smoke tests passed"
+                        # Test API endpoints
+                        echo "Testing API endpoints..."
+                        echo "GET /tasks:"
+                        curl -s http://localhost:${deployPort}/tasks || true
+                        
+                        echo ""
+                        echo "✅ Deployment verification completed successfully"
                     """
                 }
             }
@@ -363,56 +323,41 @@ pipeline {
     
     post {
         always {
-            echo "🧹 Cleaning up workspace and temporary resources"
+            echo "🧹 Cleaning up build workspace"
             
-            // Clean up Docker images
+            // Clean up temporary files
             sh '''
-                docker image prune -f
-                docker container prune -f
+                # Remove temporary files but keep artifacts
+                rm -rf htmlcov/.coverage
             '''
-            
-            // Archive build artifacts
-            archiveArtifacts artifacts: '**/*.py, requirements.txt, Dockerfile, Jenkinsfile', 
-                             fingerprint: true
         }
         
         success {
             echo "✅ Pipeline completed successfully!"
             
-            // Send success notification (would integrate with Slack, email, etc.)
-            mail to: 'devops@university.ac.uk',
-                 subject: "✅ Deployment Success: ${APP_NAME} - Build #${BUILD_NUMBER}",
-                 body: """
-                 Build #${BUILD_NUMBER} completed successfully!
-                 
-                 Environment: ${params.DEPLOYMENT_ENVIRONMENT}
-                 Git Branch: ${env.BRANCH_NAME}
-                 Docker Image: ${DOCKER_IMAGE}:${DOCKER_TAG}
-                 
-                 View build details: ${BUILD_URL}
-                 """
+            // Send success notification
+            script {
+                def deployPort = params.ENVIRONMENT == 'production' ? '8002' : 
+                               params.ENVIRONMENT == 'staging' ? '8001' : '8000'
+                
+                echo """
+                🎉 Deployment Success Summary:
+                - Build Number: ${BUILD_NUMBER}
+                - Environment: ${params.ENVIRONMENT}
+                - Application URL: http://localhost:${deployPort}
+                - Health Check: http://localhost:${deployPort}/health
+                """
+            }
         }
         
         failure {
             echo "❌ Pipeline failed!"
-            
-            // Send failure notification
-            mail to: 'devops@university.ac.uk',
-                 subject: "❌ Deployment Failed: ${APP_NAME} - Build #${BUILD_NUMBER}",
-                 body: """
-                 Build #${BUILD_NUMBER} failed!
-                 
-                 Please check the build logs for details: ${BUILD_URL}
-                 """
-        }
-        
-        unstable {
-            echo "⚠️ Pipeline completed with warnings"
+            echo "Check the build logs for details: ${BUILD_URL}"
         }
         
         cleanup {
             // Final cleanup
-            cleanWs()
+            echo "🔄 Final cleanup completed"
         }
     }
 } 
