@@ -65,20 +65,14 @@ pipeline {
         stage('Run Tests') {
             steps {
                 sh '''
-                    mkdir -p reports/tests
-                    # Run only unit tests without coverage
+                    echo "=== Running unit tests ==="
+                    # Run unit tests using the freshly built image
                     docker run --rm \
-                        -v ${WORKSPACE}:/workspace \
-                        -w /workspace \
+                        -v ${WORKSPACE}:/app \
+                        -w /app \
                         ${DOCKER_IMAGE}:${BUILD_NUMBER} \
-                        sh -c "
-                            # Make sure we have permission to write to the workspace
-                            chmod -R 777 /workspace &&
-                            # Run only unit tests
-                            python -m unittest discover -v
-                        "
+                        sh -c "python -m unittest discover -s . -p 'test*.py' -v"
                 '''
-                archiveArtifacts artifacts: 'reports/tests/**', allowEmptyArchive: true
             }
         }
         
@@ -137,10 +131,10 @@ pipeline {
                     sleep 2
                     
                     echo "Starting new container..."
-                    # Run the new container
+                    # Run the new container, mapping the host port so the app is reachable from outside the container
                     docker run -d \
                         --name ${CONTAINER_NAME} \
-                        --network host \
+                        -p ${HOST_PORT}:${CONTAINER_PORT} \
                         -e FLASK_ENV=staging \
                         ${DOCKER_IMAGE}:${BUILD_NUMBER}
                     
