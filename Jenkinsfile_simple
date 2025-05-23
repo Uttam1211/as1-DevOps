@@ -86,53 +86,33 @@ pipeline {
                     # Force remove any existing test containers
                     docker ps -a --filter "name=unit-test-run" -q | xargs -r docker rm -f || true
                     
-                    # Create a test to verify volume mounting
-                    echo "Testing volume mount..."
-                    WORKSPACE_PATH="$(pwd)"
-                    echo "test_file_content" > test_mount.txt
-                    
-                    # Run the tests with debug information
+                    # Run the tests
                     docker run --rm \
                         --name unit-test-run \
-                        -v "${WORKSPACE_PATH}":"${WORKSPACE_PATH}" \
-                        -w "${WORKSPACE_PATH}" \
                         --user root \
                         ${DOCKER_IMAGE}:${BUILD_NUMBER} \
                         bash -c '
+                            cd /app
+                            
                             echo "=== Container Environment ==="
                             echo "Working directory:"
                             pwd
                             echo "\\nDirectory contents:"
                             ls -la
                             
-                            echo "\\nVerifying mount:"
-                            cat test_mount.txt
+                            echo "\\nInstalling test dependencies..."
+                            pip install -r requirements.txt
                             
                             echo "\\nPython version and location:"
                             which python3
                             python3 --version
                             
-                            echo "\\nPYTHONPATH before:"
-                            echo $PYTHONPATH
-                            
-                            # Set up Python path
-                            export PYTHONPATH="${PYTHONPATH}:$(pwd)"
-                            
-                            echo "\\nPYTHONPATH after:"
-                            echo $PYTHONPATH
-                            
-                            echo "\\nTest file exists?"
-                            ls -l test_app.py
-                            
                             echo "\\nTest file contents:"
                             cat test_app.py
                             
                             echo "\\n=== Running Tests ==="
-                            python3 -m unittest test_app.TestTaskManager.test_task_manager_initialization -v
+                            python3 -m unittest -v test_app.py
                         '
-                    
-                    # Clean up test file
-                    rm test_mount.txt
                 '''
             }
         }

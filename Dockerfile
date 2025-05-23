@@ -33,16 +33,10 @@ RUN apt-get update \
         netcat-openbsd \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements first for better Docker layer caching
-COPY requirements.txt .
-
-# Install Python dependencies
-RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir -r requirements.txt
-
 # Copy application code
 COPY app.py .
 COPY test_app.py .
+COPY requirements.txt .
 
 # Create logs directory
 RUN mkdir -p /app/logs
