@@ -81,24 +81,60 @@ pipeline {
                         echo "Checking Docker daemon access..."
                         if ! docker info >/dev/null 2>&1; then
                             echo "ERROR: Cannot connect to Docker daemon"
-                            echo "This usually means Jenkins user needs to be added to docker group"
                             echo ""
-                            echo "To fix this issue, run the following commands on your Jenkins server:"
-                            echo "1. sudo usermod -aG docker jenkins"
-                            echo "2. sudo systemctl restart jenkins"
-                            echo "3. Or restart Jenkins service"
-                            echo ""
-                            echo "Alternative: Run Jenkins with Docker socket mounted:"
-                            echo "docker run -v /var/run/docker.sock:/var/run/docker.sock ..."
-                            echo ""
+                            echo "Diagnostic Information:"
                             echo "Current user: $(whoami)"
+                            echo "Operating System: $(uname -s)"
                             echo "Docker socket permissions:"
                             ls -la /var/run/docker.sock 2>/dev/null || echo "Docker socket not found"
-                            echo "User groups:"
-                            groups 2>/dev/null || echo "Cannot check groups"
+                            echo ""
+                            
+                            # Detect operating system
+                            if [[ "$(uname -s)" == "Darwin" ]]; then
+                                echo "✓ Detected macOS environment"
+                                echo "✗ Docker Desktop connection issue"
+                                echo ""
+                                echo "SOLUTION for macOS/Docker Desktop:"
+                                echo "1. Ensure Docker Desktop is running"
+                                echo "2. Check Docker Desktop settings:"
+                                echo "   - Open Docker Desktop"
+                                echo "   - Go to Settings > Advanced"
+                                echo "   - Ensure 'Allow the default Docker socket to be used' is enabled"
+                                echo "3. Restart Docker Desktop"
+                                echo "4. If Jenkins is in a container, ensure Docker socket is mounted:"
+                                echo "   docker run -v /var/run/docker.sock:/var/run/docker.sock ..."
+                                echo ""
+                                echo "Alternative: Use Docker Desktop's built-in Jenkins or run Jenkins with:"
+                                echo "docker run -p 8080:8080 -v /var/run/docker.sock:/var/run/docker.sock jenkins/jenkins:lts"
+                            else
+                                # Check if user is in docker group (Linux)
+                                if command -v groups >/dev/null 2>&1 && groups | grep -q docker; then
+                                    echo "✓ User is in docker group"
+                                    echo "✗ But Docker socket has wrong permissions"
+                                    echo ""
+                                    echo "SOLUTION: Fix Docker socket permissions"
+                                    echo "Run these commands on your Jenkins server:"
+                                    echo "1. sudo chown root:docker /var/run/docker.sock"
+                                    echo "2. sudo chmod 660 /var/run/docker.sock"
+                                    echo ""
+                                    echo "Or restart Docker service:"
+                                    echo "sudo systemctl restart docker"
+                                else
+                                    echo "✗ User is NOT in docker group"
+                                    echo ""
+                                    echo "SOLUTION: Add user to docker group"
+                                    echo "Run these commands on your Jenkins server:"
+                                    echo "1. sudo usermod -aG docker jenkins"
+                                    echo "2. sudo systemctl restart jenkins"
+                                fi
+                            fi
+                            
+                            echo ""
+                            echo "Debug: Check if Docker is running:"
+                            echo "docker version"
                             exit 1
                         fi
-                        echo "Docker daemon access confirmed"
+                        echo "✓ Docker daemon access confirmed"
                     '''
                     
                     // Create Docker network if it doesn't exist
