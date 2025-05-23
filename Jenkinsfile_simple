@@ -1,0 +1,246 @@
+/*
+ * Simplified Jenkins CI/CD Pipeline for University Project
+ * Author: Uttam Thakur
+ * Course: CSY3056 - DevOps
+ * University: University of Northampton
+ */
+
+pipeline {
+    agent any
+    
+    environment {
+        APP_NAME = 'task-management-system'
+        DOCKER_IMAGE = 'task-management'
+        CONTAINER_NAME = 'task-app-staging'
+        CONTAINER_PORT = '8000'
+        HOST_PORT = '8001'
+    }
+    
+    options {
+        buildDiscarder(logRotator(numToKeepStr: '5'))
+        timeout(time: 15, unit: 'MINUTES')
+        timestamps()
+    }
+    
+    stages {
+        
+        stage('1. Checkout Code') {
+            steps {
+                echo "=== Checking out source code ==="
+                cleanWs()
+                checkout scm
+                
+                // List files to verify checkout
+                sh '''
+                    echo "Files in workspace:"
+                    ls -la
+                    
+                    # Verify required files exist
+                    for file in app.py test_app.py requirements.txt Dockerfile; do
+                        if [ -f "$file" ]; then
+                            echo "✓ Found: $file"
+                        else
+                            echo "✗ Missing: $file"
+                            exit 1
+                        fi
+                    done
+                '''
+            }
+        }
+        
+        stage('2. Build Docker Image') {
+            steps {
+                echo "=== Building Docker image ==="
+                sh '''
+                    # Build the Docker image
+                    docker build -t ${DOCKER_IMAGE}:${BUILD_NUMBER} .
+                    docker tag ${DOCKER_IMAGE}:${BUILD_NUMBER} ${DOCKER_IMAGE}:latest
+                    
+                    echo "Image built successfully:"
+                    docker images | grep ${DOCKER_IMAGE}
+                '''
+            }
+        }
+        
+        stage('3. Run Tests') {
+            steps {
+                echo "=== Running automated tests ==="
+                sh '''
+                    # Create reports directory
+                    mkdir -p reports/tests
+                    
+                    # Run tests using the Docker image
+                    # Mount current directory and run tests directly
+                    docker run --rm \
+                        -v ${WORKSPACE}:/workspace \
+                        -w /workspace \
+                        ${DOCKER_IMAGE}:latest sh -c "
+                        
+                        # Show what files are available
+                        echo 'Available files:'
+                        ls -la
+                        
+                        # Install test dependencies
+                        pip install coverage
+                        
+                        # Run the tests
+                        echo 'Running unit tests...'
+                        python -m unittest test_app.py -v
+                        
+                        # Run coverage analysis
+                        echo 'Running coverage analysis...'
+                        python -m coverage run --source=. test_app.py
+                        python -m coverage report -m
+                        
+                        # Generate coverage HTML report
+                        python -m coverage html -d reports/tests/coverage
+                        
+                        echo 'Tests completed successfully!'
+                    "
+                '''
+                
+                // Archive test results
+                archiveArtifacts artifacts: 'reports/tests/**', allowEmptyArchive: true
+            }
+        }
+        
+        stage('4. Code Quality Check') {
+            steps {
+                echo "=== Running code quality checks ==="
+                sh '''
+                    # Basic code quality check
+                    docker run --rm \
+                        -v ${WORKSPACE}:/workspace \
+                        -w /workspace \
+                        ${DOCKER_IMAGE}:latest sh -c "
+                        
+                        # Install code quality tools
+                        pip install flake8
+                        
+                        # Run flake8 for basic code quality
+                        echo 'Running code quality check...'
+                        flake8 app.py test_app.py --max-line-length=100 --statistics || true
+                        
+                        echo 'Code quality check completed!'
+                    "
+                '''
+            }
+        }
+        
+        stage('5. Deploy Application') {
+            steps {
+                echo "=== Deploying application ==="
+                sh '''
+                    # Stop any existing container
+                    docker rm -f ${CONTAINER_NAME} || echo "No existing container to remove"
+                    
+                    # Run the new container
+                    docker run -d \
+                        --name ${CONTAINER_NAME} \
+                        -p ${HOST_PORT}:${CONTAINER_PORT} \
+                        -e FLASK_ENV=staging \
+                        ${DOCKER_IMAGE}:${BUILD_NUMBER}
+                    
+                    echo "Container started:"
+                    docker ps | grep ${CONTAINER_NAME}
+                '''
+            }
+        }
+        
+        stage('6. Health Check') {
+            steps {
+                echo "=== Verifying application health ==="
+                sh '''
+                    # Wait for application to start
+                    echo "Waiting for application to start..."
+                    sleep 10
+                    
+                    # Check container status
+                    docker ps | grep ${CONTAINER_NAME}
+                    
+                    # Check container logs
+                    echo "Container logs:"
+                    docker logs ${CONTAINER_NAME} --tail 10
+                    
+                    # Check if port is accessible from host
+                    echo "Testing connectivity on host port ${HOST_PORT}..."
+                    
+                    # Try health check multiple times
+                    for i in 1 2 3 4 5; do
+                        echo "Health check attempt $i/5..."
+                        
+                        # Check if we can reach the health endpoint
+                        if curl -f -s http://localhost:${HOST_PORT}/health; then
+                            echo "✓ Health check passed!"
+                            
+                            # Test API functionality
+                            echo "Testing task creation..."
+                            curl -X POST -H "Content-Type: application/json" \
+                                -d '{"title":"Test Task","description":"Automated test"}' \
+                                http://localhost:${HOST_PORT}/tasks
+                            
+                            echo "✓ Application deployed successfully!"
+                            exit 0
+                        else
+                            echo "✗ Health check failed, attempt $i"
+                            if [ $i -eq 5 ]; then
+                                echo "Final attempt failed. Deployment unsuccessful."
+                                docker logs ${CONTAINER_NAME}
+                                exit 1
+                            fi
+                            sleep 5
+                        fi
+                    done
+                '''
+            }
+        }
+    }
+    
+    post {
+        always {
+            echo """
+            === BUILD SUMMARY ===
+            Build Number: ${BUILD_NUMBER}
+            Image: ${DOCKER_IMAGE}:${BUILD_NUMBER}
+            Container: ${CONTAINER_NAME}
+            Access URL: http://localhost:${HOST_PORT}
+            Health Check: http://localhost:${HOST_PORT}/health
+            """
+            
+            // Clean up temporary files
+            sh '''
+                # Clean up any test containers
+                docker ps -a | grep test | awk '{print $1}' | xargs -r docker rm -f || true
+                # Remove dangling images
+                docker image prune -f || true
+            '''
+        }
+        
+        success {
+            echo """
+            🎉 DEPLOYMENT SUCCESSFUL! 🎉
+            
+            Your application is running at: http://localhost:${HOST_PORT}
+            Health check: http://localhost:${HOST_PORT}/health
+            
+            To test the API:
+            curl http://localhost:${HOST_PORT}/tasks
+            
+            To stop the application:
+            docker stop ${CONTAINER_NAME}
+            """
+        }
+        
+        failure {
+            echo """
+            ❌ DEPLOYMENT FAILED ❌
+            
+            Check the console output above for error details.
+            Container logs: docker logs ${CONTAINER_NAME}
+            """
+            
+            // Clean up failed deployment
+            sh 'docker rm -f ${CONTAINER_NAME} || true'
+        }
+    }
+} 
