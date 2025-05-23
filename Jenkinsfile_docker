@@ -1,527 +1,168 @@
 /*
- * Jenkins CI/CD Pipeline for Task Management System - Staging Environment
- * 
+ * =============================================================================
+ * Task Management System - CI/CD Pipeline
  * Author: Uttam Thakur
- * Course: CSY3056 - Development Operations and Software Testing
- * University: University of Northampton
- * Academic Year: 2024-2025
- * Assignment: TASK 1 - CI/CD PIPELINE DESIGN AND SETUP
- * 
- * Pipeline Implementation:
- * - Docker containerization with multi-stage builds
- * - Automated testing with coverage reporting
- * - Security scanning and code quality analysis
- * - Container deployment and health monitoring
- * - Artifact archiving and reporting
+ * Course: CSY3056 - DevOps
+ * University of Northampton
+ *
+ * Purpose: This Jenkins pipeline implements a streamlined CI/CD process for the
+ * Task Management System, including build, test, and deployment stages with
+ * proper error handling and security measures.
+ * =============================================================================
  */
 
 pipeline {
     agent any
     
+    // Environment Configuration
+    // Define critical variables used throughout the pipeline
     environment {
-        // Application configuration
         APP_NAME = 'task-management-system'
         DOCKER_IMAGE = 'task-management'
-        DOCKER_TAG = "${BUILD_NUMBER}"
-        
-        // Container configuration
-        CONTAINER_NAME = 'task-management-staging'
+        CONTAINER_NAME = 'task-app-staging'
         CONTAINER_PORT = '8000'
         HOST_PORT = '8001'
-        
-        // Network and registry
-        DOCKER_NETWORK = 'task-management-network'
-        DOCKER_REGISTRY = 'localhost:5000'
-        
-        // Git information (will be set after checkout)
-        GIT_COMMIT = ''
-        GIT_BRANCH = "${env.BRANCH_NAME ?: 'develop'}"
     }
     
-    // Build triggers
-    triggers {
-        pollSCM('H/5 * * * *')
-        githubPush()
-    }
-    
-    // Pipeline options
+    // Pipeline Configuration
+    // Set up pipeline behavior and constraints
     options {
-        buildDiscarder(logRotator(numToKeepStr: '10'))
-        timeout(time: 20, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '5'))
+        timeout(time: 15, unit: 'MINUTES')
         timestamps()
-        skipDefaultCheckout()
+        disableConcurrentBuilds()
     }
     
     stages {
-        
-        stage('Checkout & Validation') {
+        // Source Code Management
+        // Retrieve and validate source code
+        stage('Checkout') {
             steps {
-                // Clean workspace and checkout code
                 cleanWs()
                 checkout scm
                 
-                // Extract Git information after checkout
-                script {
-                    env.GIT_COMMIT = sh(returnStdout: true, script: 'git rev-parse --short HEAD').trim()
-                    echo "Git Commit: ${env.GIT_COMMIT}"
-                    echo "Git Branch: ${env.GIT_BRANCH}"
-                }
-                
-                // Validate project structure
                 sh '''
-                    echo "Validating project structure..."
-                    
-                    # Check required files (POSIX shell compatible)
-                    for file in Dockerfile app.py requirements.txt test_app.py; do
-                        if [ ! -f "$file" ]; then
-                            echo "Missing: $file"
+                    # Verify required project files
+                    for file in app.py test_app.py requirements.txt Dockerfile; do
+                        if [ -f "$file" ]; then
+                            echo "Verified: $file"
+                        else
+                            echo "Missing required file: $file"
                             exit 1
                         fi
                     done
-                    
-                    echo "Project structure validated"
                 '''
             }
         }
         
-        stage('Docker Environment Setup') {
+        // Container Build
+        // Create Docker image with application code
+        stage('Build Docker Image') {
             steps {
-                // Verify Docker availability
                 sh '''
-                    docker --version
-                    docker info >/dev/null 2>&1 || { echo "Docker daemon unavailable"; exit 1; }
-                '''
-                
-                // Prepare Docker environment
-                sh '''
-                    # Create network if not exists
-                    docker network ls | grep -q ${DOCKER_NETWORK} || docker network create ${DOCKER_NETWORK}
+                    # Clean up old images
+                    docker images --format "{{.Repository}}:{{.Tag}}" | grep "^task-management:" | xargs -r docker rmi -f || true
                     
-                    # Clean up existing containers
-                    docker rm -f ${CONTAINER_NAME} 2>/dev/null || true
-                    
-                    # Remove dangling images
-                    docker image prune -f
+                    # Build fresh image
+                    docker build --no-cache -t ${DOCKER_IMAGE}:${BUILD_NUMBER} .
+                    docker tag ${DOCKER_IMAGE}:${BUILD_NUMBER} ${DOCKER_IMAGE}:latest
                 '''
             }
         }
         
-        stage('Build Docker Images') {
-            parallel {
-                stage('Testing Image') {
-                    steps {
-                        sh '''
-                            # Build image for testing with additional test dependencies
-                            docker build \
-                                -t ${DOCKER_IMAGE}:test-${DOCKER_TAG} \
-                                -t ${DOCKER_IMAGE}:test-latest \
-                                --build-arg BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
-                                --build-arg VCS_REF=${GIT_COMMIT} \
-                                .
-                            
-                            # Install additional test dependencies in testing image
-                            docker run --rm -v ${WORKSPACE}:/workspace -w /workspace \
-                                ${DOCKER_IMAGE}:test-latest sh -c "
-                                pip install coverage flake8 pylint bandit safety radon xmlrunner || true
-                            " || echo "Test dependencies installation completed"
-                        '''
-                    }
-                }
-                stage('Production Image') {
-                    steps {
-                        sh '''
-                            # Build production image
-                            docker build \
-                                -t ${DOCKER_IMAGE}:${DOCKER_TAG} \
-                                -t ${DOCKER_IMAGE}:latest \
-                                --build-arg BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
-                                --build-arg VCS_REF=${GIT_COMMIT} \
-                                --build-arg BUILD_VERSION=${BUILD_NUMBER} \
-                                .
-                        '''
-                    }
-                }
-            }
-        }
-        
-        stage('Code Quality Analysis') {
+        // Automated Testing
+        // Execute unit tests in isolated container
+        stage('Unit Tests') {
             steps {
-                // Create reports directory
-                sh 'mkdir -p reports/quality'
-                
-                // Run code quality checks
                 sh '''
+                    # Remove any existing test containers
+                    docker ps -a --filter "name=unit-test-run" -q | xargs -r docker rm -f || true
+                    
+                    # Execute test suite
                     docker run --rm \
-                        -v ${WORKSPACE}:/workspace \
-                        -w /workspace \
-                        ${DOCKER_IMAGE}:test-latest sh -c "
-                        flake8 app.py test_app.py --max-line-length=100 --statistics --format=html --htmldir=reports/quality/flake8 || true
-                        pylint app.py --disable=missing-docstring,too-few-public-methods --output-format=json --reports=yes > reports/quality/pylint.json || true
-                        radon cc app.py --show-complexity --average > reports/quality/complexity.txt || true
-                    "
-                '''
-                
-                // Archive quality reports
-                archiveArtifacts artifacts: 'reports/quality/**', fingerprint: true, allowEmptyArchive: true
-            }
-        }
-        
-        stage('Automated Testing') {
-            steps {
-                // Create test reports directory with proper permissions
-                sh '''
-                    mkdir -p reports/tests
-                    chmod 777 reports/tests
-                '''
-                
-                // Run comprehensive test suite using the workspace files
-                sh '''
-                    echo "Current workspace files:"
-                    ls -la ${WORKSPACE}
-                    
-                    docker run --rm \
-                        -v ${WORKSPACE}:/app/workspace \
-                        -w /app/workspace \
+                        --name unit-test-run \
                         --user root \
-                        ${DOCKER_IMAGE}:test-latest sh -c "
-                        
-                        # Install test dependencies if not present
-                        pip install coverage flake8 pylint bandit safety radon || true
-                        
-                        # Create reports directory inside container
-                        mkdir -p reports/tests
-                        
-                        # List files to debug
-                        echo 'Files in container workspace:'
-                        ls -la
-                        echo 'Files in /app (original app directory):'
-                        ls -la /app || echo 'No /app directory'
-                        
-                        # Check if test file exists in mounted workspace
-                        if [ -f 'test_app.py' ] && [ -f 'app.py' ]; then
-                            echo 'Running unit tests...'
-                            python -m unittest test_app.py -v
-                            
-                            echo 'Running coverage analysis...'
-                            python -m coverage run --source=app test_app.py
-                            python -m coverage report -m --skip-covered
-                            
-                            # Generate coverage reports (with error handling)
-                            python -m coverage html -d reports/tests/coverage_html || echo 'HTML coverage report failed'
-                            python -m coverage xml -o reports/tests/coverage.xml || echo 'XML coverage report failed'
-                            python -m coverage json -o reports/tests/coverage.json || echo 'JSON coverage report failed'
-                        else
-                            echo 'Required files not found in workspace:'
-                            echo 'test_app.py exists:' 
-                            [ -f 'test_app.py' ] && echo 'YES' || echo 'NO'
-                            echo 'app.py exists:'
-                            [ -f 'app.py' ] && echo 'YES' || echo 'NO'
-                            echo 'Creating basic test report indicating no tests could run'
-                            echo 'Tests skipped - source files not accessible' > reports/tests/test_status.txt
-                        fi
-                        
-                        # Fix permissions for Jenkins access
-                        chmod -R 777 reports/tests || true
-                    "
-                '''
-                
-                // Archive test results
-                archiveArtifacts artifacts: 'reports/tests/**', fingerprint: true, allowEmptyArchive: true
-            }
-        }
-        
-        stage('Security Scanning') {
-            steps {
-                // Create security reports directory
-                sh 'mkdir -p reports/security'
-                
-                // Run security scans
-                sh '''
-                    docker run --rm \
-                        -v ${WORKSPACE}:/workspace \
-                        -w /workspace \
-                        ${DOCKER_IMAGE}:test-latest sh -c "
-                        safety check --json --output reports/security/safety.json || true
-                        bandit -r app.py -f json -o reports/security/bandit.json || true
-                        bandit -r app.py -f txt || true
-                    "
-                '''
-                
-                // Docker image security scan if trivy available
-                sh '''
-                    if command -v trivy >/dev/null 2>&1; then
-                        trivy image --format json --output reports/security/trivy.json ${DOCKER_IMAGE}:${DOCKER_TAG} || true
-                    fi
-                '''
-                
-                // Archive security reports
-                archiveArtifacts artifacts: 'reports/security/**', fingerprint: true, allowEmptyArchive: true
-            }
-        }
-        
-        stage('Container Registry') {
-            steps {
-                // Tag images for registry
-                sh '''
-                    docker tag ${DOCKER_IMAGE}:${DOCKER_TAG} ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:staging-${DOCKER_TAG}
-                    docker tag ${DOCKER_IMAGE}:latest ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:staging-latest
-                '''
-                
-                // Push to registry (configure authentication as needed)
-                sh '''
-                    echo "Registry push configured but disabled - configure authentication first"
-                    # docker push ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:staging-${DOCKER_TAG}
-                    # docker push ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:staging-latest
+                        ${DOCKER_IMAGE}:${BUILD_NUMBER} \
+                        bash -c '
+                            cd /app
+                            python3 -m unittest -v test_app.py
+                        '
                 '''
             }
         }
         
-        stage('Deploy to Staging') {
+        // Application Deployment
+        // Deploy application to staging environment
+        stage('Deploy') {
             steps {
-                // Clean up any existing container before deployment
                 sh '''
-                    echo "Cleaning up existing container..."
-                    docker rm -f ${CONTAINER_NAME} 2>/dev/null || echo "No existing container to remove"
-                '''
-                
-                // Deploy application container
-                sh '''
+                    # Clean up existing deployments
+                    docker stop ${CONTAINER_NAME} || true
+                    docker rm -f ${CONTAINER_NAME} || true
+                    
+                    # Remove containers using target port
+                    docker ps --format "{{.Names}}" --filter "publish=${HOST_PORT}" | xargs -r docker rm -f || true
+                    
+                    # Deploy application
                     docker run -d \
                         --name ${CONTAINER_NAME} \
-                        --network ${DOCKER_NETWORK} \
                         -p ${HOST_PORT}:${CONTAINER_PORT} \
                         -e FLASK_ENV=staging \
-                        -e PORT=${CONTAINER_PORT} \
-                        -e BUILD_NUMBER=${BUILD_NUMBER} \
-                        -e GIT_COMMIT=${GIT_COMMIT} \
-                        --restart unless-stopped \
-                        --label "environment=staging" \
-                        --label "build=${BUILD_NUMBER}" \
-                        --label "git.commit=${GIT_COMMIT}" \
-                        ${DOCKER_IMAGE}:${DOCKER_TAG}
+                        -e PYTHONUNBUFFERED=1 \
+                        ${DOCKER_IMAGE}:${BUILD_NUMBER}
                 '''
-                
-                // Wait for container startup
-                sh 'sleep 15'
             }
         }
         
-        stage('Health Verification') {
+        // Health Verification
+        // Ensure application is running correctly
+        stage('Health Check') {
             steps {
-                // Debug container and networking
                 sh '''
-                    echo "=== Container Status Debug ==="
-                    docker ps | grep ${CONTAINER_NAME} || echo "Container not found in running containers"
-                    echo ""
+                    # Allow application startup
+                    sleep 10
                     
-                    echo "=== Port Mapping Debug ==="
-                    docker port ${CONTAINER_NAME} || echo "No port mapping found"
-                    netstat -tlnp | grep ${HOST_PORT} || echo "Port ${HOST_PORT} not listening on host"
-                    echo ""
-                    
-                    echo "=== Container Logs ==="
-                    docker logs ${CONTAINER_NAME} --tail 10
-                    echo ""
-                '''
-                
-                // Verify application health with retry logic
-                sh '''
-                    max_attempts=5
-                    attempt=1
-                    
-                    echo "Starting health checks on http://localhost:${CONTAINER_PORT}/health"
-                    
-                    while [ $attempt -le $max_attempts ]; do
-                        echo "Health check attempt $attempt/$max_attempts..."
-                        
-                        # Test with verbose curl to see what's happening
-                        if curl -v -s -f http://localhost:${CONTAINER_PORT}/health; then
-                            echo "Health check passed on attempt $attempt"
-                            break
-                        else
-                            echo "Health check failed on attempt $attempt"
-                            
-                            # Additional debugging
-                            echo "Testing basic connectivity:"
-                            curl -v http://localhost:${CONTAINER_PORT}/health || echo "Curl failed completely"
-                            
-                            # Test if port is reachable
-                            nc -zv localhost ${CONTAINER_PORT} || echo "Port ${CONTAINER_PORT} not reachable"
-                            
-                            if [ $attempt -eq $max_attempts ]; then
-                                echo "Health check failed after $max_attempts attempts"
-                                echo "Final container status:"
-                                docker ps | grep ${CONTAINER_NAME}
-                                echo "Final container logs:"
-                                docker logs ${CONTAINER_NAME} --tail 20
-                                exit 1
-                            fi
-                            sleep 5
-                            attempt=$((attempt + 1))
+                    # Verify application health
+                    for i in $(seq 1 5); do
+                        if docker exec ${CONTAINER_NAME} curl -f http://localhost:${CONTAINER_PORT}/health; then
+                            exit 0
                         fi
+                        sleep 5
                     done
+                    
+                    # Health check failed
+                    docker logs ${CONTAINER_NAME}
+                    exit 1
                 '''
-                
-                // Test API functionality (only if health check passed)
-                sh '''
-                    echo "Testing API functionality..."
-                    
-                    # Test task creation
-                    echo "Testing task creation..."
-                    curl -X POST -H "Content-Type: application/json" \
-                        -d '{"title":"Staging Test Task","description":"Automated deployment test"}' \
-                        http://localhost:${CONTAINER_PORT}/tasks || echo "Task creation test failed"
-                    
-                    # Test task retrieval
-                    echo "Testing task retrieval..."
-                    curl -s http://localhost:${CONTAINER_PORT}/tasks | head -c 200 || echo "Task retrieval test failed"
-                '''
-            }
-        }
-        
-        stage('Monitoring Setup') {
-            steps {
-                // Create monitoring scripts
-                sh '''
-                    mkdir -p monitoring
-                    
-                    # Health monitoring script
-                    cat > monitoring/health_check.sh << 'EOF'
-#!/bin/bash
-# Health monitoring script for staging environment
-
-APP_URL="http://localhost:${HOST_PORT}"
-LOG_FILE="monitoring/health.log"
-
-check_health() {
-    if curl -s -f "$APP_URL/health" > /dev/null; then
-        echo "$(date): Application healthy" >> $LOG_FILE
-        return 0
-    else
-        echo "$(date): Application health check failed" >> $LOG_FILE
-        return 1
-    fi
-}
-
-check_container() {
-    if docker ps | grep -q "${CONTAINER_NAME}"; then
-        echo "$(date): Container running" >> $LOG_FILE
-        return 0
-    else
-        echo "$(date): Container not running" >> $LOG_FILE
-        return 1
-    fi
-}
-
-# Generate status report
-generate_report() {
-    echo "=== STAGING HEALTH REPORT ===" > monitoring/status.txt
-    echo "Generated: $(date)" >> monitoring/status.txt
-    echo "Build: ${BUILD_NUMBER}" >> monitoring/status.txt
-    echo "Commit: ${GIT_COMMIT}" >> monitoring/status.txt
-    echo "" >> monitoring/status.txt
-    docker ps | grep ${CONTAINER_NAME} >> monitoring/status.txt
-    echo "" >> monitoring/status.txt
-    docker stats ${CONTAINER_NAME} --no-stream >> monitoring/status.txt
-    echo "" >> monitoring/status.txt
-    docker logs ${CONTAINER_NAME} --tail 10 >> monitoring/status.txt
-}
-
-# Main check
-if check_health && check_container; then
-    echo "$(date): All systems operational" >> $LOG_FILE
-    generate_report
-    exit 0
-else
-    echo "$(date): Issues detected" >> $LOG_FILE
-    generate_report
-    exit 1
-fi
-EOF
-                    
-                    chmod +x monitoring/health_check.sh
-                    ./monitoring/health_check.sh
-                '''
-                
-                // Archive monitoring scripts
-                archiveArtifacts artifacts: 'monitoring/**', fingerprint: true
             }
         }
     }
     
+    // Pipeline Completion Handling
     post {
         always {
-            // Generate build summary
+            // Clean up resources
             sh '''
-                echo "=== BUILD SUMMARY ==="
-                echo "Build: ${BUILD_NUMBER}"
-                echo "Branch: ${GIT_BRANCH}"
-                echo "Commit: ${GIT_COMMIT}"
-                echo "Container: ${CONTAINER_NAME}"
-                echo "Port: ${HOST_PORT}"
-                echo "Image: ${DOCKER_IMAGE}:${DOCKER_TAG}"
-            '''
-            
-            // Cleanup
-            sh '''
-                # Remove test containers
-                docker ps -a | grep -E "(test|temp)" | awk '{print $1}' | xargs -r docker rm -f || true
-                
-                # Clean temporary files
-                rm -rf .coverage .pytest_cache __pycache__ || true
-                
-                # Prune dangling images
+                docker ps -a --filter "name=unit-test-run" -q | xargs -r docker rm -f || true
                 docker image prune -f || true
             '''
         }
         
         success {
-            script {
-                echo """
-                DEPLOYMENT SUCCESSFUL
-                
-                Application URL: http://localhost:${HOST_PORT}
-                Health Check: http://localhost:${HOST_PORT}/health
-                
-                Reports:
-                - Coverage: ${BUILD_URL}artifact/reports/tests/coverage_html/index.html
-                - Quality: ${BUILD_URL}artifact/reports/quality/
-                - Security: ${BUILD_URL}artifact/reports/security/
-                - Monitoring: ${BUILD_URL}artifact/monitoring/
-                
-                Container: ${DOCKER_IMAGE}:${DOCKER_TAG}
-                Git: ${GIT_BRANCH}@${GIT_COMMIT}
-                """
-            }
+            echo """
+            === Deployment Summary ===
+            Build: ${BUILD_NUMBER}
+            Image: ${DOCKER_IMAGE}:${BUILD_NUMBER}
+            Container: ${CONTAINER_NAME}
+            Access: http://localhost:${HOST_PORT}
+            Health: http://localhost:${HOST_PORT}/health
+            """
         }
         
         failure {
-            script {
-                echo """
-                DEPLOYMENT FAILED
-                
-                Build: ${BUILD_NUMBER}
-                Git: ${GIT_BRANCH}@${GIT_COMMIT}
-                Console: ${BUILD_URL}console
-                Artifacts: ${BUILD_URL}artifact/
-                """
-                
-                // Collect failure diagnostics
-                sh '''
-                    echo "=== FAILURE DIAGNOSTICS ==="
-                    docker ps -a | grep task-management || echo "No containers found"
-                    docker logs ${CONTAINER_NAME} --tail 20 || echo "No logs available"
-                    docker images | grep ${DOCKER_IMAGE} || echo "No images found"
-                    netstat -tlnp | grep ${HOST_PORT} || echo "Port not in use"
-                '''
-                
-                // Cleanup failed deployment
-                sh 'docker rm -f ${CONTAINER_NAME} || true'
-            }
-        }
-        
-        cleanup {
-            echo "Pipeline cleanup completed"
+            echo "=== Build ${BUILD_NUMBER} Failed ==="
+            sh 'docker stop ${CONTAINER_NAME} || true'
+            sh 'docker rm -f ${CONTAINER_NAME} || true'
         }
     }
 } 
