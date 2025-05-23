@@ -329,13 +329,13 @@ pipeline {
                     max_attempts=5
                     attempt=1
                     
-                    echo "Starting health checks on http://localhost:${HOST_PORT}/health"
+                    echo "Starting health checks on http://localhost:${CONTAINER_PORT}/health"
                     
                     while [ $attempt -le $max_attempts ]; do
                         echo "Health check attempt $attempt/$max_attempts..."
                         
                         # Test with verbose curl to see what's happening
-                        if curl -v -s -f http://localhost:${HOST_PORT}/health; then
+                        if curl -v -s -f http://localhost:${CONTAINER_PORT}/health; then
                             echo "Health check passed on attempt $attempt"
                             break
                         else
@@ -343,10 +343,10 @@ pipeline {
                             
                             # Additional debugging
                             echo "Testing basic connectivity:"
-                            curl -v http://localhost:${HOST_PORT}/health || echo "Curl failed completely"
+                            curl -v http://localhost:${CONTAINER_PORT}/health || echo "Curl failed completely"
                             
                             # Test if port is reachable
-                            nc -zv localhost ${HOST_PORT} || echo "Port ${HOST_PORT} not reachable"
+                            nc -zv localhost ${CONTAINER_PORT} || echo "Port ${CONTAINER_PORT} not reachable"
                             
                             if [ $attempt -eq $max_attempts ]; then
                                 echo "Health check failed after $max_attempts attempts"
@@ -370,11 +370,11 @@ pipeline {
                     echo "Testing task creation..."
                     curl -X POST -H "Content-Type: application/json" \
                         -d '{"title":"Staging Test Task","description":"Automated deployment test"}' \
-                        http://localhost:${HOST_PORT}/tasks || echo "Task creation test failed"
+                        http://localhost:${CONTAINER_PORT}/tasks || echo "Task creation test failed"
                     
                     # Test task retrieval
                     echo "Testing task retrieval..."
-                    curl -s http://localhost:${HOST_PORT}/tasks | head -c 200 || echo "Task retrieval test failed"
+                    curl -s http://localhost:${CONTAINER_PORT}/tasks | head -c 200 || echo "Task retrieval test failed"
                 '''
             }
         }
