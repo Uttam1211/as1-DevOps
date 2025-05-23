@@ -64,22 +64,25 @@ pipeline {
         
         stage('Run Tests') {
             steps {
-                echo "=== Running unit tests ==="
-                sh '''
-                    # Run unit tests using the freshly built image
-                    docker run --rm \
-                        -v "${WORKSPACE}":/app \
-                        -w /app \
-                        ${DOCKER_IMAGE}:${BUILD_NUMBER} \
-                        python -m unittest discover -v
+                script {
+                    echo "=== Running unit tests ==="
+                    def testExitCode = sh(
+                        script: '''
+                            # Run unit tests in the container
+                            docker run --rm \
+                                -v "${PWD}":/app \
+                                -w /app \
+                                --user root \
+                                ${DOCKER_IMAGE}:${BUILD_NUMBER} \
+                                python -m unittest discover -v
+                        ''',
+                        returnStatus: true
+                    )
                     
-                    # Check the exit code
-                    TEST_EXIT_CODE=$?
-                    if [ $TEST_EXIT_CODE -ne 0 ]; then
-                        echo "Tests failed with exit code $TEST_EXIT_CODE"
-                        exit $TEST_EXIT_CODE
-                    fi
-                '''
+                    if (testExitCode != 0) {
+                        error "Unit tests failed with exit code ${testExitCode}"
+                    }
+                }
             }
         }
         
@@ -189,6 +192,9 @@ pipeline {
             
             // Clean up temporary files and test containers
             sh '''
+                # Clean up coverage artifacts
+                rm -rf .coverage reports/tests/coverage* htmlcov 2>/dev/null || true
+                
                 # Clean up any test containers
                 docker ps -a | grep test | awk '{print $1}' | xargs -r docker rm -f || true
                 # Remove dangling images
