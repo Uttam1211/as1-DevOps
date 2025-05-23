@@ -33,16 +33,21 @@ RUN apt-get update \
         netcat-openbsd \
     && rm -rf /var/lib/apt/lists/*
 
+# Copy requirements first for better Docker layer caching
+COPY requirements.txt .
+
+# Install Python dependencies
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir -r requirements.txt
+
 # Copy application code
 COPY app.py .
 COPY test_app.py .
-COPY requirements.txt .
 
-# Create logs directory
-RUN mkdir -p /app/logs
-
-# Change ownership to non-root user
-RUN chown -R flaskuser:flaskgroup /app
+# Create logs directory and set permissions
+RUN mkdir -p /app/logs \
+    && chown -R flaskuser:flaskgroup /app \
+    && chmod -R 755 /app
 
 # Switch to non-root user
 USER flaskuser
@@ -55,5 +60,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 EXPOSE ${PORT}
 
 # For university project - use simple Python command for easier debugging
-# Production would use gunicorn
-CMD ["python", "app.py"] 
+CMD ["python3", "-u", "app.py"] 

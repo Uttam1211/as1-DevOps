@@ -147,30 +147,53 @@ pipeline {
                         --name ${CONTAINER_NAME} \
                         -p ${HOST_PORT}:${CONTAINER_PORT} \
                         -e FLASK_ENV=staging \
+                        -e PYTHONUNBUFFERED=1 \
                         ${DOCKER_IMAGE}:${BUILD_NUMBER}
                     
                     echo "Container started successfully:"
                     docker ps | grep ${CONTAINER_NAME}
+                    
+                    # Wait for container to start and show initial logs
+                    sleep 5
+                    echo "Initial container logs:"
+                    docker logs ${CONTAINER_NAME}
                 '''
             }
         }
         
         stage('Health Check') {
             steps {
-                echo "Waiting for app to come up…"
-                sleep 10
+                echo "=== Running health checks ==="
                 sh '''
+                    # Initial wait for app startup
+                    echo "Waiting for app to start..."
+                    sleep 10
+                    
+                    # Check container status
+                    echo "Container status:"
+                    docker ps -a | grep ${CONTAINER_NAME}
+                    
+                    # Show container logs
+                    echo "Container logs:"
+                    docker logs ${CONTAINER_NAME}
+                    
+                    # Perform health checks
                     for i in $(seq 1 5); do
+                        echo "Attempt $i/5: Checking health endpoint..."
                         if docker exec ${CONTAINER_NAME} curl -f http://localhost:${CONTAINER_PORT}/health; then
                             echo "✓ Health check passed!"
                             exit 0
                         else
-                            echo "✗ health check attempt $i/5 failed"
+                            echo "✗ Health check attempt $i/5 failed"
+                            echo "Container logs:"
+                            docker logs ${CONTAINER_NAME} --tail 50
                             sleep 5
                         fi
                     done
+                    
                     echo "❌ Health check failed after 5 attempts"
-                    docker logs ${CONTAINER_NAME} --tail 50
+                    echo "Final container logs:"
+                    docker logs ${CONTAINER_NAME}
                     exit 1
                 '''
             }
