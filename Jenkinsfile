@@ -144,15 +144,17 @@ pipeline {
                     '''
                 }
                 
-                // Publish test coverage report
-                publishHTML([
-                    allowMissing: false,
-                    alwaysLinkToLastBuild: true,
-                    keepAll: true,
-                    reportDir: 'htmlcov',
-                    reportFiles: 'index.html',
-                    reportName: 'Test Coverage Report'
-                ])
+                // Archive coverage reports (works without additional plugins)
+                script {
+                    // Archive HTML coverage report as build artifact
+                    if (fileExists('htmlcov')) {
+                        archiveArtifacts artifacts: 'htmlcov/**', fingerprint: true, allowEmptyArchive: true
+                        echo "Coverage report archived as build artifact"
+                        echo "Access via: ${BUILD_URL}artifact/htmlcov/index.html"
+                    } else {
+                        echo "Coverage HTML report not generated"
+                    }
+                }
             }
         }
         
