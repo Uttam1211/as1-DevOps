@@ -1,58 +1,59 @@
 /*
- * Automated Jenkins Pipeline for Task Management System (Python Only)
+ * Jenkins CI/CD Pipeline for Task Management System
+ * 
  * Author: Uttam Thakur
- * Purpose: Fully automated CI/CD pipeline for Flask application without Docker
+ * Course: CSY3056 - Development Operations and Software Testing
+ * University: University of Northampton
  * Date: 2025
- * Description: Automated pipeline with environment selection based on Git branch
+ * 
+ * This pipeline implements automated CI/CD for a Python Flask application
+ * featuring branch-based environment detection, automated testing, security
+ * scanning, and deployment with health verification.
  */
 
 pipeline {
     agent any
     
-    // Define environment variables
     environment {
         // Application configuration
         APP_NAME = 'task-management-app'
-        APP_PORT = '8000'
         PYTHON_VERSION = '3.11'
         
-        // Deployment paths
+        // Environment-specific deployment paths
         DEV_PATH = '/var/www/dev/task-management'
         STAGING_PATH = '/var/www/staging/task-management'
         PROD_PATH = '/var/www/prod/task-management'
         
-        // Auto-determined environment (will be set based on branch)
+        // Runtime variables (set dynamically based on branch)
         DEPLOY_ENVIRONMENT = ''
         DEPLOY_PORT = ''
     }
     
-    // Configure automatic triggers
+    // Automated triggers for continuous integration
     triggers {
-        // Poll SCM every 5 minutes for changes
-        pollSCM('H/5 * * * *')
-        // Trigger on push events
-        githubPush()
+        pollSCM('H/5 * * * *')  // Poll SCM every 5 minutes
+        githubPush()            // Trigger on Git webhook events
     }
     
     stages {
-        stage('1. Checkout & Environment Detection') {
+        
+        stage('Checkout and Environment Detection') {
             steps {
-                echo "🔄 Starting Automated CI/CD Pipeline for ${APP_NAME}"
-                echo "📋 Build Number: ${BUILD_NUMBER}"
-                
-                // Clean workspace and checkout code
-                cleanWs()
-                checkout scm
-                
-                // Automatically determine environment based on Git branch
                 script {
+                    // Clean workspace for consistent builds
+                    cleanWs()
+                    
+                    // Checkout source code from SCM
+                    checkout scm
+                    
+                    // Extract Git information for environment detection
                     def gitCommit = sh(returnStdout: true, script: 'git rev-parse --short HEAD').trim()
                     def gitBranch = sh(returnStdout: true, script: 'git rev-parse --abbrev-ref HEAD').trim()
                     
-                    echo "📂 Git Commit: ${gitCommit}"
-                    echo "🌿 Git Branch: ${gitBranch}"
-                    
-                    // Determine environment and port based on branch
+                    // Determine deployment environment based on Git branch
+                    // Production: main/master branches
+                    // Staging: develop/staging branches  
+                    // Development: all other branches
                     if (gitBranch == 'main' || gitBranch == 'master') {
                         env.DEPLOY_ENVIRONMENT = 'production'
                         env.DEPLOY_PORT = '8002'
@@ -64,86 +65,86 @@ pipeline {
                         env.DEPLOY_PORT = '8000'
                     }
                     
-                    echo "🎯 Auto-detected Environment: ${env.DEPLOY_ENVIRONMENT}"
-                    echo "🚢 Target Port: ${env.DEPLOY_PORT}"
+                    echo "Build: ${BUILD_NUMBER}, Branch: ${gitBranch}, Environment: ${env.DEPLOY_ENVIRONMENT}"
                 }
             }
         }
         
-        stage('2. Environment Setup') {
+        stage('Environment Setup') {
             steps {
-                echo "🔧 Setting up Python virtual environment"
-                
-                sh '''
-                    # Remove existing virtual environment if it exists
-                    rm -rf venv
+                script {
+                    // Remove any existing virtual environment
+                    sh 'rm -rf venv'
                     
-                    # Create fresh virtual environment
-                    python -m venv venv
+                    // Create fresh Python virtual environment
+                    sh 'python -m venv venv'
                     
-                    # Activate virtual environment and upgrade pip
-                    . venv/bin/activate
-                    pip install --upgrade pip
+                    // Install dependencies in isolated environment
+                    sh '''
+                        . venv/bin/activate
+                        pip install --upgrade pip --quiet
+                        pip install -r requirements.txt --quiet
+                    '''
                     
-                    # Install project dependencies
-                    pip install -r requirements.txt
-                    
-                    # Verify installation
-                    echo "Python version:"
-                    python --version
-                    echo "Installed packages:"
-                    pip list
-                '''
+                    // Verify environment setup
+                    sh '''
+                        . venv/bin/activate
+                        python --version
+                        pip list --format=freeze | wc -l
+                    '''
+                }
             }
         }
         
-        stage('3. Code Quality Check') {
+        stage('Code Quality Analysis') {
             steps {
-                echo "🔍 Running automated code quality checks"
-                
-                sh '''
-                    # Activate virtual environment
-                    . venv/bin/activate
+                script {
+                    // Install code quality tools
+                    sh '''
+                        . venv/bin/activate
+                        pip install flake8 pylint --quiet
+                    '''
                     
-                    # Install code quality tools
-                    pip install flake8 pylint
+                    // Run PEP8 compliance check
+                    sh '''
+                        . venv/bin/activate
+                        flake8 app.py test_app.py --max-line-length=100 --statistics || true
+                    '''
                     
-                    # Run flake8 for PEP8 compliance
-                    echo "Running flake8 code style check..."
-                    flake8 app.py test_app.py --max-line-length=100 --statistics || true
-                    
-                    # Run basic pylint check
-                    echo "Running pylint code quality check..."
-                    pylint app.py --disable=missing-docstring,too-few-public-methods --score=yes || true
-                '''
+                    // Run code quality analysis
+                    sh '''
+                        . venv/bin/activate
+                        pylint app.py --disable=missing-docstring,too-few-public-methods --score=yes || true
+                    '''
+                }
             }
         }
         
-        stage('4. Automated Testing') {
+        stage('Automated Testing') {
             steps {
-                echo "🧪 Running automated unit tests with coverage"
+                script {
+                    // Install testing dependencies
+                    sh '''
+                        . venv/bin/activate
+                        pip install coverage --quiet
+                    '''
+                    
+                    // Execute unit test suite
+                    sh '''
+                        . venv/bin/activate
+                        python -m unittest test_app.py -v
+                    '''
+                    
+                    // Generate test coverage analysis
+                    sh '''
+                        . venv/bin/activate
+                        python -m coverage run -m unittest test_app.py
+                        python -m coverage report -m
+                        python -m coverage html
+                    '''
+                }
                 
-                sh '''
-                    # Activate virtual environment
-                    . venv/bin/activate
-                    
-                    # Install testing tools
-                    pip install coverage
-                    
-                    # Run unit tests with verbose output
-                    echo "Running all unit tests..."
-                    python -m unittest test_app.py -v
-                    
-                    # Run tests with coverage analysis
-                    echo "Generating coverage report..."
-                    python -m coverage run -m unittest test_app.py
-                    python -m coverage report -m
-                    
-                    # Generate HTML coverage report
-                    python -m coverage html
-                '''
-                
-                // Publish HTML coverage report
+                // Publish test coverage report
                 publishHTML([
                     allowMissing: false,
                     alwaysLinkToLastBuild: true,
@@ -155,89 +156,79 @@ pipeline {
             }
         }
         
-        stage('5. Security Scan') {
+        stage('Security Scanning') {
             steps {
-                echo "🔒 Running automated security vulnerability scan"
-                
-                sh '''
-                    # Activate virtual environment
-                    . venv/bin/activate
+                script {
+                    // Install security analysis tools
+                    sh '''
+                        . venv/bin/activate
+                        pip install safety bandit --quiet
+                    '''
                     
-                    # Install security tools
-                    pip install safety bandit
+                    // Check dependencies for known vulnerabilities
+                    sh '''
+                        . venv/bin/activate
+                        safety check || true
+                    '''
                     
-                    # Check for known vulnerabilities in dependencies
-                    echo "Checking dependencies for security vulnerabilities..."
-                    safety check || true
-                    
-                    # Run bandit for security issues in code
-                    echo "Running bandit security scan..."
-                    bandit -r app.py -f txt || true
-                '''
+                    // Perform static security analysis on source code
+                    sh '''
+                        . venv/bin/activate
+                        bandit -r app.py -f txt || true
+                    '''
+                }
             }
         }
         
-        stage('6. Package Application') {
+        stage('Application Packaging') {
             steps {
-                echo "📦 Packaging application for automated deployment"
-                
-                sh '''
-                    # Create deployment package
-                    echo "Creating deployment package..."
+                script {
+                    // Create deployment package structure
+                    sh 'mkdir -p package'
                     
-                    # Create package directory
-                    mkdir -p package
+                    // Copy application files
+                    sh '''
+                        cp app.py package/
+                        cp requirements.txt package/
+                    '''
                     
-                    # Copy application files
-                    cp app.py package/
-                    cp requirements.txt package/
-                    
-                    # Create environment-specific startup script
-                    cat > package/start.sh << EOF
+                    // Generate environment-specific startup script
+                    sh '''
+                        cat > package/start.sh << EOF
 #!/bin/bash
-# Auto-generated startup script for ${DEPLOY_ENVIRONMENT} environment
+# Startup script for ${DEPLOY_ENVIRONMENT} environment
 
-# Set environment variables
 export FLASK_ENV=${DEPLOY_ENVIRONMENT}
 export PORT=${DEPLOY_PORT}
 
-# Activate virtual environment
 source venv/bin/activate
-
-# Start the application
-echo "Starting Task Management System on port ${DEPLOY_PORT} in ${DEPLOY_ENVIRONMENT} mode..."
 python app.py
 EOF
+                        chmod +x package/start.sh
+                    '''
                     
-                    chmod +x package/start.sh
-                    
-                    # Create stop script
-                    cat > package/stop.sh << EOF
+                    // Generate application stop script
+                    sh '''
+                        cat > package/stop.sh << EOF
 #!/bin/bash
-# Auto-generated stop script
+# Stop script for application shutdown
 
-echo "Stopping Task Management System..."
 pkill -f "python.*app.py" || echo "No running application found"
 EOF
-                    
-                    chmod +x package/stop.sh
-                    
-                    echo "✅ Application packaged for ${DEPLOY_ENVIRONMENT} environment"
-                '''
+                        chmod +x package/stop.sh
+                    '''
+                }
                 
-                // Archive the package
+                // Archive build artifacts
                 archiveArtifacts artifacts: 'package/**', fingerprint: true
             }
         }
         
-        stage('7. Automated Deployment') {
+        stage('Deployment') {
             steps {
-                echo "🚀 Deploying application to ${env.DEPLOY_ENVIRONMENT} environment"
-                
                 script {
+                    // Determine deployment path based on environment
                     def deployPath = ""
-                    
-                    // Set deployment path based on environment
                     switch(env.DEPLOY_ENVIRONMENT) {
                         case 'development':
                             deployPath = env.DEV_PATH
@@ -250,82 +241,62 @@ EOF
                             break
                     }
                     
+                    // Execute deployment process
                     sh """
-                        echo "Deploying to: ${deployPath}"
-                        echo "Environment: ${env.DEPLOY_ENVIRONMENT}"
-                        echo "Port: ${env.DEPLOY_PORT}"
-                        
-                        # Create deployment directory if it doesn't exist
+                        # Create deployment directory
                         mkdir -p ${deployPath}
                         
-                        # Stop existing application (if running)
-                        echo "Stopping existing application..."
+                        # Stop existing application instance
                         pkill -f "python.*app.py" || true
                         sleep 2
                         
-                        # Copy application files to deployment directory
-                        echo "Copying application files..."
+                        # Deploy application files
                         cp -r package/* ${deployPath}/
                         cp -r venv ${deployPath}/
                         
-                        # Set up environment for deployment
+                        # Start application with environment configuration
                         cd ${deployPath}
                         export FLASK_ENV=${env.DEPLOY_ENVIRONMENT}
                         export PORT=${env.DEPLOY_PORT}
-                        
-                        # Start application in background
-                        echo "Starting application..."
                         nohup ./start.sh > app.log 2>&1 &
                         
-                        # Wait for application to start
                         sleep 5
-                        
-                        echo "✅ Application deployed successfully"
-                        echo "🌐 Application URL: http://localhost:${env.DEPLOY_PORT}"
-                        echo "📁 Deployment path: ${deployPath}"
                     """
+                    
+                    echo "Deployment completed: ${env.DEPLOY_ENVIRONMENT} environment on port ${env.DEPLOY_PORT}"
                 }
             }
         }
         
-        stage('8. Automated Health Check') {
+        stage('Health Verification') {
             steps {
-                echo "🏥 Performing automated health verification"
-                
                 script {
+                    // Wait for application startup
+                    sh 'sleep 10'
+                    
+                    // Verify application health with retry logic
                     sh """
-                        # Wait for application to be fully ready
-                        sleep 10
-                        
-                        # Check if application is responding
-                        echo "Testing health endpoint at http://localhost:${env.DEPLOY_PORT}/health"
-                        
-                        # Try health check endpoint with retry logic
                         for i in {1..5}; do
                             if curl -s -f http://localhost:${env.DEPLOY_PORT}/health; then
-                                echo ""
-                                echo "✅ Health check passed!"
+                                echo "Health check passed"
                                 break
                             else
-                                echo "Health check attempt \$i failed, retrying..."
+                                echo "Health check attempt \$i failed"
+                                if [ \$i -eq 5 ]; then
+                                    echo "Health verification failed after 5 attempts"
+                                    exit 1
+                                fi
                                 sleep 5
                             fi
-                            
-                            if [ \$i -eq 5 ]; then
-                                echo "❌ Health check failed after 5 attempts"
-                                exit 1
-                            fi
                         done
-                        
-                        # Test additional API endpoints
-                        echo ""
-                        echo "Testing API endpoints..."
-                        echo "GET /tasks:"
-                        curl -s http://localhost:${env.DEPLOY_PORT}/tasks | head -c 100
-                        
-                        echo ""
-                        echo "✅ All health checks passed - deployment verified!"
                     """
+                    
+                    // Verify API endpoints functionality
+                    sh """
+                        curl -s http://localhost:${env.DEPLOY_PORT}/tasks | head -c 100
+                    """
+                    
+                    echo "Health verification completed successfully"
                 }
             }
         }
@@ -333,85 +304,59 @@ EOF
     
     post {
         always {
-            echo "🧹 Cleaning up build workspace"
-            
-            // Clean up temporary files but keep important artifacts
-            sh '''
-                # Remove temporary files but keep coverage reports
-                rm -rf .coverage 2>/dev/null || true
-            '''
+            // Clean up temporary build artifacts
+            sh 'rm -rf .coverage 2>/dev/null || true'
         }
         
         success {
-            echo "✅ Automated pipeline completed successfully!"
-            
             script {
                 echo """
-                🎉 Deployment Success Summary:
-                ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-                📋 Build Number: ${BUILD_NUMBER}
-                🌿 Git Branch: ${env.BRANCH_NAME ?: 'N/A'}
-                🎯 Environment: ${env.DEPLOY_ENVIRONMENT}
-                🚢 Port: ${env.DEPLOY_PORT}
-                🌐 Application URL: http://localhost:${env.DEPLOY_PORT}
-                🏥 Health Check: http://localhost:${env.DEPLOY_PORT}/health
-                📊 Coverage Report: ${BUILD_URL}Test_Coverage_Report/
-                ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                Deployment Summary:
+                - Build: ${BUILD_NUMBER}
+                - Environment: ${env.DEPLOY_ENVIRONMENT}
+                - Port: ${env.DEPLOY_PORT}
+                - URL: http://localhost:${env.DEPLOY_PORT}
                 """
                 
-                // Send notification (if email configured)
+                // Send email notification if configured
                 try {
                     mail to: 'devops@company.com',
-                         subject: "✅ Auto-Deployment Success: ${APP_NAME} [${env.DEPLOY_ENVIRONMENT}] - Build #${BUILD_NUMBER}",
+                         subject: "Deployment Success: ${APP_NAME} [${env.DEPLOY_ENVIRONMENT}] - Build ${BUILD_NUMBER}",
                          body: """
-                         Automated deployment completed successfully!
+                         Deployment completed successfully.
                          
                          Environment: ${env.DEPLOY_ENVIRONMENT}
                          Application URL: http://localhost:${env.DEPLOY_PORT}
-                         Git Branch: ${env.BRANCH_NAME ?: 'N/A'}
-                         
-                         View build details: ${BUILD_URL}
+                         Build Details: ${BUILD_URL}
                          """
                 } catch (Exception e) {
-                    echo "📧 Email notification not configured (${e.getMessage()})"
+                    echo "Email notification not configured"
                 }
             }
         }
         
         failure {
-            echo "❌ Automated pipeline failed!"
-            
             script {
-                echo """
-                💥 Pipeline Failure Details:
-                ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-                📋 Build Number: ${BUILD_NUMBER}
-                🌿 Git Branch: ${env.BRANCH_NAME ?: 'N/A'}
-                🎯 Target Environment: ${env.DEPLOY_ENVIRONMENT ?: 'Unknown'}
-                🔗 Build URL: ${BUILD_URL}
-                ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-                """
+                echo "Pipeline failed - Build ${BUILD_NUMBER}"
                 
-                // Send failure notification (if email configured)
+                // Send failure notification if configured
                 try {
                     mail to: 'devops@company.com',
-                         subject: "❌ Auto-Deployment Failed: ${APP_NAME} [${env.DEPLOY_ENVIRONMENT ?: 'Unknown'}] - Build #${BUILD_NUMBER}",
+                         subject: "Deployment Failed: ${APP_NAME} [${env.DEPLOY_ENVIRONMENT}] - Build ${BUILD_NUMBER}",
                          body: """
-                         Automated deployment failed!
+                         Pipeline execution failed.
                          
-                         Please check the build logs for details: ${BUILD_URL}
-                         
-                         Branch: ${env.BRANCH_NAME ?: 'N/A'}
-                         Target Environment: ${env.DEPLOY_ENVIRONMENT ?: 'Unknown'}
+                         Build Details: ${BUILD_URL}
+                         Environment: ${env.DEPLOY_ENVIRONMENT ?: 'Unknown'}
                          """
                 } catch (Exception e) {
-                    echo "📧 Email notification not configured (${e.getMessage()})"
+                    echo "Email notification not configured"
                 }
             }
         }
         
         cleanup {
-            echo "🔄 Final automated cleanup completed"
+            echo "Pipeline cleanup completed"
         }
     }
 } 
