@@ -57,6 +57,11 @@ pipeline {
             steps {
                 echo "=== Building Docker image ==="
                 sh '''
+                    # Clean up old images first
+                    echo "Cleaning up old images..."
+                    docker images --format "{{.Repository}}:{{.Tag}}" | grep "^task-management:" | xargs -r docker rmi -f || true
+                    docker images --format "{{.Repository}}:{{.Tag}}" | grep "localhost:5000/task-management:" | xargs -r docker rmi -f || true
+                    
                     # Build the Docker image, ensuring no cache to pick up Dockerfile changes
                     docker build --no-cache -t ${DOCKER_IMAGE}:${BUILD_NUMBER} .
                     docker tag ${DOCKER_IMAGE}:${BUILD_NUMBER} ${DOCKER_IMAGE}:latest
@@ -70,51 +75,44 @@ pipeline {
         stage('Unit Tests') {
             steps {
                 echo "=== Running unit tests ==="
-                script {
-                    def testExitCode = sh(
-                        script: '''#!/bin/bash
-                            set -ex
-                            echo "=== Debug Information ==="
-                            echo "Current directory (host): $(pwd)"
-                            ls -la
-                            
-                            echo "\\n=== Running tests with image ${DOCKER_IMAGE}:${BUILD_NUMBER} ==="
-                            
-                            # Force remove any existing test containers
-                            docker ps -a --filter "name=unit-test-run" -q | xargs -r docker rm -f
-                            
-                            # Run the tests with debug information
-                            docker run --rm \
-                                --name unit-test-run \
-                                -v "$(pwd)":/app \
-                                -w /app \
-                                --user root \
-                                ${DOCKER_IMAGE}:${BUILD_NUMBER} \
-                                bash -c "
-                                    echo '=== Container Environment ==='
-                                    echo 'Working directory:'
-                                    pwd
-                                    echo '\\nDirectory contents:'
-                                    ls -la
-                                    echo '\\nPython version and location:'
-                                    which python3
-                                    python3 --version
-                                    echo '\\nPYTHONPATH:'
-                                    echo \$PYTHONPATH
-                                    echo '\\nTest file contents:'
-                                    cat test_app.py
-                                    echo '\\n=== Running Tests ==='
-                                    export PYTHONPATH=/app
-                                    python3 -m unittest -v test_app.py 2>&1
-                                "
-                        ''',
-                        returnStatus: true
-                    )
+                sh '''
+                    echo "=== Debug Information ==="
+                    echo "Current directory (host): $(pwd)"
+                    echo "Host directory contents:"
+                    ls -la
                     
-                    if (testExitCode != 0) {
-                        error "Unit tests failed with exit code ${testExitCode}"
-                    }
-                }
+                    echo "\\n=== Running tests with image ${DOCKER_IMAGE}:${BUILD_NUMBER} ==="
+                    
+                    # Force remove any existing test containers
+                    docker ps -a --filter "name=unit-test-run" -q | xargs -r docker rm -f || true
+                    
+                    # Run the tests with debug information
+                    docker run --rm \
+                        --name unit-test-run \
+                        -v "$(pwd)":/app \
+                        -w /app \
+                        --user root \
+                        ${DOCKER_IMAGE}:${BUILD_NUMBER} \
+                        bash -c '
+                            echo "=== Container Environment ==="
+                            echo "Working directory:"
+                            pwd
+                            echo "\\nDirectory contents:"
+                            ls -la
+                            echo "\\nPython version and location:"
+                            which python3
+                            python3 --version
+                            echo "\\nPYTHONPATH:"
+                            echo $PYTHONPATH
+                            echo "\\nTest file location and contents:"
+                            find / -name test_app.py 2>/dev/null
+                            echo "\\nTest file contents:"
+                            cat test_app.py
+                            echo "\\n=== Running Tests ==="
+                            export PYTHONPATH=/app
+                            python3 -m unittest test_app.TestTaskManager.test_task_manager_initialization -v
+                        '
+                '''
             }
         }
         
