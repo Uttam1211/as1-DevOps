@@ -62,15 +62,22 @@ pipeline {
             }
         }
         
-        stage('Run Tests') {
+        stage('Execute Unit Tests') {
             steps {
                 script {
                     echo "=== Running unit tests ==="
                     def testExitCode = sh(
-                        script: '''
-                            # Run unit tests in the container
+                        script: '''#!/bin/bash
+                            set -e
+                            echo "Running tests with image ${DOCKER_IMAGE}:${BUILD_NUMBER}"
+                            
+                            # Force remove any existing test containers
+                            docker ps -a --filter "name=unit-test-run" -q | xargs -r docker rm -f
+                            
+                            # Run the tests
                             docker run --rm \
-                                -v "${PWD}":/app \
+                                --name unit-test-run \
+                                -v "$(pwd)":/app \
                                 -w /app \
                                 --user root \
                                 ${DOCKER_IMAGE}:${BUILD_NUMBER} \
@@ -192,11 +199,20 @@ pipeline {
             
             // Clean up temporary files and test containers
             sh '''
-                # Clean up coverage artifacts
-                rm -rf .coverage reports/tests/coverage* htmlcov 2>/dev/null || true
+                # Remove all test-related artifacts
+                rm -rf \
+                    .coverage \
+                    reports/ \
+                    htmlcov/ \
+                    .pytest_cache/ \
+                    __pycache__/ \
+                    .unittest \
+                    2>/dev/null || true
                 
                 # Clean up any test containers
+                docker ps -a --filter "name=unit-test-run" -q | xargs -r docker rm -f || true
                 docker ps -a | grep test | awk '{print $1}' | xargs -r docker rm -f || true
+                
                 # Remove dangling images
                 docker image prune -f || true
             '''
