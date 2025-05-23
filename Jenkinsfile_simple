@@ -20,17 +20,22 @@ pipeline {
         buildDiscarder(logRotator(numToKeepStr: '5'))
         timeout(time: 15, unit: 'MINUTES')
         timestamps()
+        skipDefaultCheckout(false)
+        disableConcurrentBuilds()
     }
     
     stages {
+        stage('Clean Workspace') {
+            steps {
+                cleanWs()
+            }
+        }
         
-        stage('Checkout Code') {
+        stage('Checkout') {
             steps {
                 echo "=== Checking out source code ==="
-                cleanWs()
                 checkout scm
                 
-                // List files to verify checkout
                 sh '''
                     echo "Files in workspace:"
                     ls -la
@@ -62,10 +67,10 @@ pipeline {
             }
         }
         
-        stage('Execute Unit Tests') {
+        stage('Unit Tests') {
             steps {
+                echo "=== Running unit tests ==="
                 script {
-                    echo "=== Running unit tests ==="
                     def testExitCode = sh(
                         script: '''#!/bin/bash
                             set -e
@@ -93,29 +98,6 @@ pipeline {
             }
         }
         
-        stage('Code Quality') {
-            steps {
-                echo "=== Running code quality checks ==="
-                sh '''
-                    # Basic code quality check
-                    docker run --rm \
-                        -v ${WORKSPACE}:/workspace \
-                        -w /workspace \
-                        ${DOCKER_IMAGE}:latest sh -c "
-                        
-                        # Install code quality tools
-                        pip install flake8
-                        
-                        # Run flake8 for basic code quality
-                        echo 'Running code quality check...'
-                        flake8 app.py test_app.py --max-line-length=100 --statistics || true
-                        
-                        echo 'Code quality check completed!'
-                    "
-                '''
-            }
-        }
-        
         stage('Deploy') {
             steps {
                 echo "=== Deploying application ==="
@@ -140,15 +122,8 @@ pipeline {
                         echo "No containers found using port ${HOST_PORT}"
                     fi
                     
-                    # Double-check: Kill any process using the port on host (if accessible)
-                    echo "Checking if port ${HOST_PORT} is in use on host..."
-                    netstat -tlnp | grep ":${HOST_PORT} " || echo "Port ${HOST_PORT} is free"
-                    
-                    # Wait a moment for cleanup
-                    sleep 2
-                    
                     echo "Starting new container..."
-                    # Run the new container, mapping the host port so the app is reachable from outside the container
+                    # Run the new container with port mapping
                     docker run -d \
                         --name ${CONTAINER_NAME} \
                         -p ${HOST_PORT}:${CONTAINER_PORT} \
@@ -157,9 +132,6 @@ pipeline {
                     
                     echo "Container started successfully:"
                     docker ps | grep ${CONTAINER_NAME}
-                    
-                    echo "Port mapping:"
-                    docker port ${CONTAINER_NAME}
                 '''
             }
         }
@@ -169,18 +141,18 @@ pipeline {
                 echo "Waiting for app to come up…"
                 sleep 10
                 sh '''
-                for i in $(seq 1 5); do
-                    if docker exec ${CONTAINER_NAME} curl -f http://localhost:${CONTAINER_PORT}/health; then
-                    echo "✓ Health check passed!"
-                    exit 0
-                    else
-                    echo "✗ health check attempt $i/5 failed"
-                    sleep 5
-                    fi
-                done
-                echo "❌ Health check failed after 5 attempts"
-                docker logs ${CONTAINER_NAME} --tail 50
-                exit 1
+                    for i in $(seq 1 5); do
+                        if docker exec ${CONTAINER_NAME} curl -f http://localhost:${CONTAINER_PORT}/health; then
+                            echo "✓ Health check passed!"
+                            exit 0
+                        else
+                            echo "✗ health check attempt $i/5 failed"
+                            sleep 5
+                        fi
+                    done
+                    echo "❌ Health check failed after 5 attempts"
+                    docker logs ${CONTAINER_NAME} --tail 50
+                    exit 1
                 '''
             }
         }
@@ -197,9 +169,13 @@ pipeline {
             Health Check: http://localhost:${HOST_PORT}/health
             """
             
-            // Clean up temporary files and test containers
             sh '''
-                # Remove all test-related artifacts
+                # Clean up test containers and artifacts
+                docker ps -a --filter "name=unit-test-run" -q | xargs -r docker rm -f || true
+                docker ps -a | grep test | awk '{print $1}' | xargs -r docker rm -f || true
+                docker image prune -f || true
+                
+                # Clean workspace
                 rm -rf \
                     .coverage \
                     reports/ \
@@ -208,13 +184,6 @@ pipeline {
                     __pycache__/ \
                     .unittest \
                     2>/dev/null || true
-                
-                # Clean up any test containers
-                docker ps -a --filter "name=unit-test-run" -q | xargs -r docker rm -f || true
-                docker ps -a | grep test | awk '{print $1}' | xargs -r docker rm -f || true
-                
-                # Remove dangling images
-                docker image prune -f || true
             '''
         }
         
@@ -227,9 +196,6 @@ pipeline {
             
             To test the API:
             curl http://localhost:${HOST_PORT}/tasks
-            
-            To stop the application:
-            docker stop ${CONTAINER_NAME}
             """
         }
         
@@ -241,7 +207,6 @@ pipeline {
             Container logs: docker logs ${CONTAINER_NAME}
             """
             
-            // Clean up failed deployment
             sh '''
                 docker stop ${CONTAINER_NAME} || true
                 docker rm -f ${CONTAINER_NAME} || true
