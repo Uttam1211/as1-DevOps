@@ -64,14 +64,21 @@ pipeline {
         
         stage('Run Tests') {
             steps {
+                echo "=== Running unit tests ==="
                 sh '''
-                    echo "=== Running unit tests ==="
                     # Run unit tests using the freshly built image
                     docker run --rm \
-                        -v ${WORKSPACE}:/app \
+                        -v "${WORKSPACE}":/app \
                         -w /app \
                         ${DOCKER_IMAGE}:${BUILD_NUMBER} \
-                        sh -c "python -m unittest discover -s . -p 'test*.py' -v"
+                        python -m unittest discover -v
+                    
+                    # Check the exit code
+                    TEST_EXIT_CODE=$?
+                    if [ $TEST_EXIT_CODE -ne 0 ]; then
+                        echo "Tests failed with exit code $TEST_EXIT_CODE"
+                        exit $TEST_EXIT_CODE
+                    fi
                 '''
             }
         }
