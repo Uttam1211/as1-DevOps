@@ -24,7 +24,7 @@ pipeline {
         PYTHON_VERSION = '3.11'
         
         // Fixed deployment configuration (development environment)
-        DEPLOY_PATH = '/var/www/dev/task-management'
+        DEPLOY_PATH = "${WORKSPACE}/deploy/task-management"
         DEPLOY_PORT = '8000'
         FLASK_ENV = 'development'
     }
