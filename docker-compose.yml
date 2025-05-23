@@ -1,0 +1,123 @@
+# Docker Compose Configuration for Task Management System
+# Author: Student Name
+# Purpose: Multi-environment Docker orchestration
+# Date: 2024
+# Description: Compose file for development, testing, and local deployment
+
+version: "3.8"
+
+services:
+  # Main application service
+  task-management-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: task-management-system
+    ports:
+      - "8000:8000"
+    environment:
+      - FLASK_ENV=development
+      - FLASK_DEBUG=true
+      - PORT=8000
+    volumes:
+      # Mount source code for development hot reload
+      - ./app.py:/app/app.py:ro
+      - ./logs:/app/logs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - task-network
+
+  # Testing service (separate container for testing)
+  task-management-test:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: task-management-test
+    ports:
+      - "5001:8000"
+    environment:
+      - FLASK_ENV=testing
+      - FLASK_DEBUG=false
+      - PORT=8000
+    command: ["python", "-m", "unittest", "test_app.py", "-v"]
+    depends_on:
+      - task-management-app
+    networks:
+      - task-network
+    profiles:
+      - testing
+
+  # Production-like service
+  task-management-prod:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: task-management-production
+    ports:
+      - "5002:8000"
+    environment:
+      - FLASK_ENV=production
+      - FLASK_DEBUG=false
+      - PORT=8000
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+    networks:
+      - task-network
+    profiles:
+      - production
+
+  # Nginx reverse proxy (for production deployment)
+  nginx:
+    image: nginx:alpine
+    container_name: task-management-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - task-management-prod
+    restart: unless-stopped
+    networks:
+      - task-network
+    profiles:
+      - production
+
+  # Redis for session storage and caching (future enhancement)
+  redis:
+    image: redis:7-alpine
+    container_name: task-management-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    networks:
+      - task-network
+    profiles:
+      - production
+      - caching
+
+# Named volumes for persistent data
+volumes:
+  redis_data:
+    driver: local
+
+# Custom network for service communication
+networks:
+  task-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

@@ -1,0 +1,21 @@
+# Flask Application Dependencies
+# Author: Student Name
+# Purpose: Task Management System Dependencies
+# Date: 2024
+
+# Core Flask framework
+Flask==2.3.3
+
+# WSGI server for production deployment
+gunicorn==21.2.0
+
+# Testing framework (included in Python but listed for clarity)
+# unittest is part of Python standard library
+
+# Development dependencies
+pytest==7.4.2
+pytest-flask==1.2.0
+coverage==7.3.0
+
+# Additional utilities
+python-dotenv==1.0.0 
