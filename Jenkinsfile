@@ -282,17 +282,14 @@ EOF
         success {
             script {
                 echo "Deployment successful: Build ${BUILD_NUMBER} deployed to http://localhost:8000"
-                
-                }
+                // Email notification will be implemented when SMTP is configured
             }
         }
         
         failure {
             script {
                 echo "Deployment failed: Build ${BUILD_NUMBER} - Check logs at ${BUILD_URL}console"
-
-                // Send email notification if configured, will implement when smtp is set up
-                
+                // Email notification will be implemented when SMTP is configured
             }
         }
         
