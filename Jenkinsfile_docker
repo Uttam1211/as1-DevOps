@@ -1,19 +1,18 @@
 /*
- * Jenkins CI/CD Pipeline for Task Management System (Docker Implementation)
+ * Jenkins CI/CD Pipeline for Task Management System - Staging Environment
  * 
  * Author: Uttam Thakur
  * Course: CSY3056 - Development Operations and Software Testing
  * University: University of Northampton
- * Date: 2025
+ * Academic Year: 2024-2025
+ * Assignment: TASK 1 - CI/CD PIPELINE DESIGN AND SETUP
  * 
- * This pipeline implements containerized CI/CD for a Python Flask application
- * featuring Docker build, multi-stage testing, security scanning, and deployment
- * with container orchestration and health monitoring.
- * 
- * NOTE: This is the Docker-based implementation. For traditional deployment:
- * - Jenkinsfile (standard deployment)
- * - Jenkinsfile_staging (staging environment)
- * - Jenkinsfile_prod (production environment)
+ * Pipeline Implementation:
+ * - Docker containerization with multi-stage builds
+ * - Automated testing with coverage reporting
+ * - Security scanning and code quality analysis
+ * - Container deployment and health monitoring
+ * - Artifact archiving and reporting
  */
 
 pipeline {
@@ -21,403 +20,399 @@ pipeline {
     
     environment {
         // Application configuration
-        APP_NAME = 'task-management-app'
+        APP_NAME = 'task-management-system'
         DOCKER_IMAGE = 'task-management'
         DOCKER_TAG = "${BUILD_NUMBER}"
-        DOCKER_LATEST = 'latest'
         
         // Container configuration
-        CONTAINER_NAME = 'task-management-container'
+        CONTAINER_NAME = 'task-management-staging'
         CONTAINER_PORT = '8000'
-        HOST_PORT = '8000'
+        HOST_PORT = '8001'
         
-        // Docker registry (configure as needed)
+        // Network and registry
+        DOCKER_NETWORK = 'task-management-network'
         DOCKER_REGISTRY = 'localhost:5000'
         
-        // Network configuration
-        DOCKER_NETWORK = 'task-management-network'
+        // Git information
+        GIT_COMMIT = "${sh(returnStdout: true, script: 'git rev-parse --short HEAD').trim()}"
+        GIT_BRANCH = "${env.BRANCH_NAME ?: 'develop'}"
     }
     
-    // Automated triggers for continuous integration
+    // Build triggers
     triggers {
-        pollSCM('H/5 * * * *')  // Poll SCM every 5 minutes
-        githubPush()            // Trigger on Git webhook events
+        pollSCM('H/5 * * * *')
+        githubPush()
+    }
+    
+    // Pipeline options
+    options {
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+        timeout(time: 20, unit: 'MINUTES')
+        timestamps()
+        skipDefaultCheckout()
     }
     
     stages {
         
-        stage('Checkout') {
+        stage('Checkout & Validation') {
             steps {
-                script {
-                    // Clean workspace for consistent builds
-                    cleanWs()
-                    
-                    // Checkout source code from SCM
-                    checkout scm
-                    
-                    // Extract Git information for logging
-                    def gitCommit = sh(returnStdout: true, script: 'git rev-parse --short HEAD').trim()
-                    def gitBranch = sh(returnStdout: true, script: 'git rev-parse --abbrev-ref HEAD').trim()
-                    
-                    echo "Build ${BUILD_NUMBER}: ${gitBranch}@${gitCommit} -> Docker:${HOST_PORT}"
-                }
+                // Clean workspace and checkout code
+                cleanWs()
+                checkout scm
+                
+                // Validate project structure
+                sh '''
+                    required_files=("Dockerfile" "app.py" "requirements.txt" "test_app.py")
+                    for file in "${required_files[@]}"; do
+                        [ ! -f "$file" ] && echo "Missing: $file" && exit 1
+                    done
+                    echo "Project structure validated"
+                '''
             }
         }
         
         stage('Docker Environment Setup') {
             steps {
-                script {
-                    // Check Docker installation and permissions
-                    sh '''
-                        echo "Checking Docker installation..."
-                        docker --version || {
-                            echo "ERROR: Docker is not installed or not in PATH"
-                            exit 1
-                        }
-                    '''
+                // Verify Docker availability
+                sh '''
+                    docker --version
+                    docker info >/dev/null 2>&1 || { echo "Docker daemon unavailable"; exit 1; }
+                '''
+                
+                // Prepare Docker environment
+                sh '''
+                    # Create network if not exists
+                    docker network ls | grep -q ${DOCKER_NETWORK} || docker network create ${DOCKER_NETWORK}
                     
-                    // Check Docker daemon access with proper error handling
-                    sh '''
-                        echo "Checking Docker daemon access..."
-                        if ! docker info >/dev/null 2>&1; then
-                            echo "ERROR: Cannot connect to Docker daemon"
-                            echo ""
-                            echo "Diagnostic Information:"
-                            echo "Current user: $(whoami)"
-                            echo "Operating System: $(uname -s)"
-                            echo "Docker socket permissions:"
-                            ls -la /var/run/docker.sock 2>/dev/null || echo "Docker socket not found"
-                            echo ""
-                            
-                            # Detect operating system
-                            if [[ "$(uname -s)" == "Darwin" ]]; then
-                                echo "✓ Detected macOS environment"
-                                echo "✗ Docker Desktop connection issue"
-                                echo ""
-                                echo "SOLUTION for macOS/Docker Desktop:"
-                                echo "1. Ensure Docker Desktop is running"
-                                echo "2. Check Docker Desktop settings:"
-                                echo "   - Open Docker Desktop"
-                                echo "   - Go to Settings > Advanced"
-                                echo "   - Ensure 'Allow the default Docker socket to be used' is enabled"
-                                echo "3. Restart Docker Desktop"
-                                echo "4. If Jenkins is in a container, ensure Docker socket is mounted:"
-                                echo "   docker run -v /var/run/docker.sock:/var/run/docker.sock ..."
-                                echo ""
-                                echo "Alternative: Use Docker Desktop's built-in Jenkins or run Jenkins with:"
-                                echo "docker run -p 8080:8080 -v /var/run/docker.sock:/var/run/docker.sock jenkins/jenkins:lts"
-                            else
-                                # Check if user is in docker group (Linux)
-                                if command -v groups >/dev/null 2>&1 && groups | grep -q docker; then
-                                    echo "✓ User is in docker group"
-                                    echo "✗ But Docker socket has wrong permissions"
-                                    echo ""
-                                    echo "SOLUTION: Fix Docker socket permissions"
-                                    echo "Run these commands on your Jenkins server:"
-                                    echo "1. sudo chown root:docker /var/run/docker.sock"
-                                    echo "2. sudo chmod 660 /var/run/docker.sock"
-                                    echo ""
-                                    echo "Or restart Docker service:"
-                                    echo "sudo systemctl restart docker"
-                                else
-                                    echo "✗ User is NOT in docker group"
-                                    echo ""
-                                    echo "SOLUTION: Add user to docker group"
-                                    echo "Run these commands on your Jenkins server:"
-                                    echo "1. sudo usermod -aG docker jenkins"
-                                    echo "2. sudo systemctl restart jenkins"
-                                fi
-                            fi
-                            
-                            echo ""
-                            echo "Debug: Check if Docker is running:"
-                            echo "docker version"
-                            exit 1
-                        fi
-                        echo "✓ Docker daemon access confirmed"
-                    '''
+                    # Clean up existing containers
+                    docker rm -f ${CONTAINER_NAME} 2>/dev/null || true
                     
-                    // Create Docker network if it doesn't exist
-                    sh '''
-                        docker network ls | grep ${DOCKER_NETWORK} || docker network create ${DOCKER_NETWORK}
-                    '''
-                    
-                    // Clean up any existing containers
-                    sh '''
-                        docker ps -a | grep ${CONTAINER_NAME} && docker rm -f ${CONTAINER_NAME} || true
-                    '''
-                    
-                    echo "Docker environment ready"
-                }
+                    # Remove dangling images
+                    docker image prune -f
+                '''
             }
         }
         
-        stage('Build Docker Image') {
-            steps {
-                script {
-                    // Verify Dockerfile exists
-                    sh '''
-                        if [ ! -f Dockerfile ]; then
-                            echo "Error: Dockerfile not found in repository"
-                            exit 1
-                        fi
-                        echo "Using existing Dockerfile from repository"
-                    '''
-                    
-                    // Build Docker image with multiple targets
-                    sh '''
-                        echo "Building Docker image: ${DOCKER_IMAGE}:${DOCKER_TAG}"
-                        docker build --target development -t ${DOCKER_IMAGE}:${DOCKER_TAG} .
-                        docker build --target development -t ${DOCKER_IMAGE}:${DOCKER_LATEST} .
-                        docker build --target testing -t ${DOCKER_IMAGE}:testing .
-                        docker build --target production -t ${DOCKER_IMAGE}:production .
-                    '''
-                    
-                    echo "Docker image built successfully"
+        stage('Build Docker Images') {
+            parallel {
+                stage('Testing Image') {
+                    steps {
+                        sh '''
+                            docker build --target testing \
+                                -t ${DOCKER_IMAGE}:test-${DOCKER_TAG} \
+                                -t ${DOCKER_IMAGE}:test-latest \
+                                --build-arg BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
+                                --build-arg VCS_REF=${GIT_COMMIT} \
+                                .
+                        '''
+                    }
+                }
+                stage('Production Image') {
+                    steps {
+                        sh '''
+                            docker build --target production \
+                                -t ${DOCKER_IMAGE}:${DOCKER_TAG} \
+                                -t ${DOCKER_IMAGE}:latest \
+                                --build-arg BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
+                                --build-arg VCS_REF=${GIT_COMMIT} \
+                                --build-arg BUILD_VERSION=${BUILD_NUMBER} \
+                                .
+                        '''
+                    }
                 }
             }
         }
         
         stage('Code Quality Analysis') {
             steps {
-                script {
-                    // Run code quality checks in container
-                    sh '''
-                        echo "Running code quality analysis in container..."
-                        docker run --rm -v ${WORKSPACE}:/workspace -w /workspace ${DOCKER_IMAGE}:testing sh -c "
-                            flake8 app.py test_app.py --max-line-length=100 --statistics || true
-                            pylint app.py --disable=missing-docstring,too-few-public-methods --score=yes || true
-                        "
-                    '''
-                }
+                // Create reports directory
+                sh 'mkdir -p reports/quality'
+                
+                // Run code quality checks
+                sh '''
+                    docker run --rm \
+                        -v ${WORKSPACE}:/workspace \
+                        -w /workspace \
+                        ${DOCKER_IMAGE}:test-latest sh -c "
+                        flake8 app.py test_app.py --max-line-length=100 --statistics --format=html --htmldir=reports/quality/flake8 || true
+                        pylint app.py --disable=missing-docstring,too-few-public-methods --output-format=json --reports=yes > reports/quality/pylint.json || true
+                        radon cc app.py --show-complexity --average > reports/quality/complexity.txt || true
+                    "
+                '''
+                
+                // Archive quality reports
+                archiveArtifacts artifacts: 'reports/quality/**', fingerprint: true, allowEmptyArchive: true
             }
         }
         
         stage('Automated Testing') {
             steps {
-                script {
-                    // Run tests in isolated container
-                    sh '''
-                        echo "Running tests in container..."
-                        docker run --rm -v ${WORKSPACE}:/workspace -w /workspace ${DOCKER_IMAGE}:testing sh -c "
-                            python -m unittest test_app.py -v
-                            python -m coverage run -m unittest test_app.py
-                            python -m coverage report -m
-                            python -m coverage html
-                        "
-                    '''
-                    
-                    // Copy coverage reports from container
-                    sh '''
-                        docker run --rm -v ${WORKSPACE}:/workspace -w /workspace ${DOCKER_IMAGE}:testing sh -c "
-                            cp -r htmlcov /workspace/ 2>/dev/null || true
-                        "
-                    '''
-                }
+                // Create test reports directory
+                sh 'mkdir -p reports/tests'
                 
-                // Archive coverage reports
-                script {
-                    if (fileExists('htmlcov')) {
-                        archiveArtifacts artifacts: 'htmlcov/**', fingerprint: true, allowEmptyArchive: true
-                        echo "Coverage report archived at ${BUILD_URL}artifact/htmlcov/index.html"
-                    }
-                }
+                // Run comprehensive test suite
+                sh '''
+                    docker run --rm \
+                        -v ${WORKSPACE}:/workspace \
+                        -w /workspace \
+                        ${DOCKER_IMAGE}:test-latest sh -c "
+                        python -m coverage run --source=. -m unittest discover -s . -p 'test_*.py' -v
+                        python -m coverage report -m --skip-covered
+                        python -m coverage html -d reports/tests/coverage_html
+                        python -m coverage xml -o reports/tests/coverage.xml
+                        python -m coverage json -o reports/tests/coverage.json
+                    "
+                '''
+                
+                // Archive test results
+                archiveArtifacts artifacts: 'reports/tests/**', fingerprint: true, allowEmptyArchive: true
             }
         }
         
         stage('Security Scanning') {
             steps {
-                script {
-                    // Container security scanning
-                    sh '''
-                        echo "Running security scans in container..."
-                        docker run --rm -v ${WORKSPACE}:/workspace -w /workspace ${DOCKER_IMAGE}:testing sh -c "
-                            safety check || true
-                            bandit -r app.py -f txt || true
-                        "
-                    '''
-                    
-                    // Docker image security scan (if trivy is available)
-                    sh '''
-                        if command -v trivy >/dev/null 2>&1; then
-                            echo "Running Docker image security scan..."
-                            trivy image ${DOCKER_IMAGE}:${DOCKER_TAG} || true
-                        else
-                            echo "Trivy not available - skipping image security scan"
-                        fi
-                    '''
-                }
+                // Create security reports directory
+                sh 'mkdir -p reports/security'
+                
+                // Run security scans
+                sh '''
+                    docker run --rm \
+                        -v ${WORKSPACE}:/workspace \
+                        -w /workspace \
+                        ${DOCKER_IMAGE}:test-latest sh -c "
+                        safety check --json --output reports/security/safety.json || true
+                        bandit -r app.py -f json -o reports/security/bandit.json || true
+                        bandit -r app.py -f txt || true
+                    "
+                '''
+                
+                // Docker image security scan if trivy available
+                sh '''
+                    if command -v trivy >/dev/null 2>&1; then
+                        trivy image --format json --output reports/security/trivy.json ${DOCKER_IMAGE}:${DOCKER_TAG} || true
+                    fi
+                '''
+                
+                // Archive security reports
+                archiveArtifacts artifacts: 'reports/security/**', fingerprint: true, allowEmptyArchive: true
             }
         }
         
-        stage('Container Registry Push') {
+        stage('Container Registry') {
             steps {
-                script {
-                    // Tag images for registry
-                    sh '''
-                        docker tag ${DOCKER_IMAGE}:${DOCKER_TAG} ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${DOCKER_TAG}
-                        docker tag ${DOCKER_IMAGE}:${DOCKER_LATEST} ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${DOCKER_LATEST}
-                        docker tag ${DOCKER_IMAGE}:production ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:production
-                    '''
-                    
-                    // Push to registry (configure authentication as needed)
-                    sh '''
-                        echo "Pushing images to registry..."
-                        # docker push ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${DOCKER_TAG}
-                        # docker push ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${DOCKER_LATEST}
-                        # docker push ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:production
-                        echo "Registry push disabled - configure authentication first"
-                    '''
-                    
-                    echo "Container images ready for deployment"
-                }
+                // Tag images for registry
+                sh '''
+                    docker tag ${DOCKER_IMAGE}:${DOCKER_TAG} ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:staging-${DOCKER_TAG}
+                    docker tag ${DOCKER_IMAGE}:latest ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:staging-latest
+                '''
+                
+                // Push to registry (configure authentication as needed)
+                sh '''
+                    echo "Registry push configured but disabled - configure authentication first"
+                    # docker push ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:staging-${DOCKER_TAG}
+                    # docker push ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:staging-latest
+                '''
             }
         }
         
-        stage('Container Deployment') {
+        stage('Deploy to Staging') {
             steps {
-                script {
-                    echo "Deploying container on port ${HOST_PORT}"
-                    
-                    // Deploy application container
-                    sh '''
-                        echo "Starting application container..."
-                        docker run -d \\
-                            --name ${CONTAINER_NAME} \\
-                            --network ${DOCKER_NETWORK} \\
-                            -p ${HOST_PORT}:${CONTAINER_PORT} \\
-                            -e FLASK_ENV=development \\
-                            -e PORT=${CONTAINER_PORT} \\
-                            --restart unless-stopped \\
-                            ${DOCKER_IMAGE}:${DOCKER_TAG}
-                        
-                        sleep 10
-                    '''
-                    
-                    // Verify container is running
-                    sh '''
-                        docker ps | grep ${CONTAINER_NAME}
-                        docker logs ${CONTAINER_NAME} | tail -10
-                    '''
-                    
-                    echo "Container deployed successfully"
-                }
+                // Deploy application container
+                sh '''
+                    docker run -d \
+                        --name ${CONTAINER_NAME} \
+                        --network ${DOCKER_NETWORK} \
+                        -p ${HOST_PORT}:${CONTAINER_PORT} \
+                        -e FLASK_ENV=staging \
+                        -e PORT=${CONTAINER_PORT} \
+                        -e BUILD_NUMBER=${BUILD_NUMBER} \
+                        -e GIT_COMMIT=${GIT_COMMIT} \
+                        --restart unless-stopped \
+                        --label "environment=staging" \
+                        --label "build=${BUILD_NUMBER}" \
+                        --label "git.commit=${GIT_COMMIT}" \
+                        ${DOCKER_IMAGE}:${DOCKER_TAG}
+                '''
+                
+                // Wait for container startup
+                sh 'sleep 15'
             }
         }
         
         stage('Health Verification') {
             steps {
-                script {
-                    // Wait for application startup
-                    sh 'sleep 15'
+                // Verify application health with retry logic
+                sh '''
+                    max_attempts=5
+                    attempt=1
                     
-                    // Verify application health with retry logic
-                    sh '''
-                        echo "Performing container health verification..."
-                        for i in {1..5}; do
-                            if curl -s -f http://localhost:${HOST_PORT}/health; then
-                                echo "Health check passed"
-                                break
-                            else
-                                if [ $i -eq 5 ]; then
-                                    echo "Health verification failed after 5 attempts"
-                                    docker logs ${CONTAINER_NAME}
-                                    exit 1
-                                fi
-                                sleep 5
+                    while [ $attempt -le $max_attempts ]; do
+                        if curl -s -f http://localhost:${HOST_PORT}/health; then
+                            echo "Health check passed on attempt $attempt"
+                            break
+                        else
+                            if [ $attempt -eq $max_attempts ]; then
+                                echo "Health check failed after $max_attempts attempts"
+                                docker logs ${CONTAINER_NAME} --tail 20
+                                exit 1
                             fi
-                        done
-                    '''
+                            sleep 5
+                            ((attempt++))
+                        fi
+                    done
+                '''
+                
+                // Test API functionality
+                sh '''
+                    # Test task creation
+                    curl -X POST -H "Content-Type: application/json" \
+                        -d '{"title":"Staging Test Task","description":"Automated deployment test"}' \
+                        http://localhost:${HOST_PORT}/tasks
                     
-                    // Verify API endpoints functionality
-                    sh '''
-                        curl -s http://localhost:${HOST_PORT}/tasks | head -c 100
-                    '''
-                    
-                    // Container health check
-                    sh '''
-                        docker exec ${CONTAINER_NAME} ps aux
-                        docker stats ${CONTAINER_NAME} --no-stream
-                    '''
-                    
-                    echo "Health verification completed"
-                }
+                    # Test task retrieval
+                    curl -s http://localhost:${HOST_PORT}/tasks | head -c 200
+                '''
             }
         }
         
-        stage('Container Monitoring Setup') {
+        stage('Monitoring Setup') {
             steps {
-                script {
-                    // Set up basic monitoring
-                    sh '''
-                        echo "Setting up container monitoring..."
-                        
-                        # Create monitoring script
-                        cat > monitor_container.sh << 'EOF'
+                // Create monitoring scripts
+                sh '''
+                    mkdir -p monitoring
+                    
+                    # Health monitoring script
+                    cat > monitoring/health_check.sh << 'EOF'
 #!/bin/bash
-echo "=== Container Status ==="
-docker ps | grep ${CONTAINER_NAME}
-echo "=== Container Stats ==="
-docker stats ${CONTAINER_NAME} --no-stream
-echo "=== Container Logs (last 20 lines) ==="
-docker logs ${CONTAINER_NAME} --tail 20
-echo "=== Application Health ==="
-curl -s http://localhost:${HOST_PORT}/health || echo "Health check failed"
+# Health monitoring script for staging environment
+
+APP_URL="http://localhost:${HOST_PORT}"
+LOG_FILE="monitoring/health.log"
+
+check_health() {
+    if curl -s -f "$APP_URL/health" > /dev/null; then
+        echo "$(date): Application healthy" >> $LOG_FILE
+        return 0
+    else
+        echo "$(date): Application health check failed" >> $LOG_FILE
+        return 1
+    fi
+}
+
+check_container() {
+    if docker ps | grep -q "${CONTAINER_NAME}"; then
+        echo "$(date): Container running" >> $LOG_FILE
+        return 0
+    else
+        echo "$(date): Container not running" >> $LOG_FILE
+        return 1
+    fi
+}
+
+# Generate status report
+generate_report() {
+    echo "=== STAGING HEALTH REPORT ===" > monitoring/status.txt
+    echo "Generated: $(date)" >> monitoring/status.txt
+    echo "Build: ${BUILD_NUMBER}" >> monitoring/status.txt
+    echo "Commit: ${GIT_COMMIT}" >> monitoring/status.txt
+    echo "" >> monitoring/status.txt
+    docker ps | grep ${CONTAINER_NAME} >> monitoring/status.txt
+    echo "" >> monitoring/status.txt
+    docker stats ${CONTAINER_NAME} --no-stream >> monitoring/status.txt
+    echo "" >> monitoring/status.txt
+    docker logs ${CONTAINER_NAME} --tail 10 >> monitoring/status.txt
+}
+
+# Main check
+if check_health && check_container; then
+    echo "$(date): All systems operational" >> $LOG_FILE
+    generate_report
+    exit 0
+else
+    echo "$(date): Issues detected" >> $LOG_FILE
+    generate_report
+    exit 1
+fi
 EOF
-                        chmod +x monitor_container.sh
-                    '''
                     
-                    // Archive monitoring script
-                    archiveArtifacts artifacts: 'monitor_container.sh', fingerprint: true
-                    
-                    echo "Container monitoring setup completed"
-                }
+                    chmod +x monitoring/health_check.sh
+                    ./monitoring/health_check.sh
+                '''
+                
+                // Archive monitoring scripts
+                archiveArtifacts artifacts: 'monitoring/**', fingerprint: true
             }
         }
     }
     
     post {
         always {
-            // Clean up temporary files
+            // Generate build summary
             sh '''
-                rm -rf .coverage 2>/dev/null || true
+                echo "=== BUILD SUMMARY ==="
+                echo "Build: ${BUILD_NUMBER}"
+                echo "Branch: ${GIT_BRANCH}"
+                echo "Commit: ${GIT_COMMIT}"
+                echo "Container: ${CONTAINER_NAME}"
+                echo "Port: ${HOST_PORT}"
+                echo "Image: ${DOCKER_IMAGE}:${DOCKER_TAG}"
+            '''
+            
+            // Cleanup
+            sh '''
+                # Remove test containers
+                docker ps -a | grep -E "(test|temp)" | awk '{print $1}' | xargs -r docker rm -f || true
+                
+                # Clean temporary files
+                rm -rf .coverage .pytest_cache __pycache__ || true
+                
+                # Prune dangling images
                 docker image prune -f || true
             '''
         }
         
         success {
             script {
-                echo "Docker deployment successful: Build ${BUILD_NUMBER} deployed to http://localhost:${HOST_PORT}"
+                echo """
+                DEPLOYMENT SUCCESSFUL
                 
-                // Display deployment information
-                sh '''
-                    echo "=== Deployment Summary ==="
-                    echo "Container: ${CONTAINER_NAME}"
-                    echo "Image: ${DOCKER_IMAGE}:${DOCKER_TAG}"
-                    echo "Port: ${HOST_PORT}"
-                    echo "Network: ${DOCKER_NETWORK}"
-                    echo "Application URL: http://localhost:${HOST_PORT}"
-                    echo "Health Check: http://localhost:${HOST_PORT}/health"
-                '''
+                Application URL: http://localhost:${HOST_PORT}
+                Health Check: http://localhost:${HOST_PORT}/health
+                
+                Reports:
+                - Coverage: ${BUILD_URL}artifact/reports/tests/coverage_html/index.html
+                - Quality: ${BUILD_URL}artifact/reports/quality/
+                - Security: ${BUILD_URL}artifact/reports/security/
+                - Monitoring: ${BUILD_URL}artifact/monitoring/
+                
+                Container: ${DOCKER_IMAGE}:${DOCKER_TAG}
+                Git: ${GIT_BRANCH}@${GIT_COMMIT}
+                """
             }
         }
         
         failure {
             script {
-                echo "Docker deployment failed: Build ${BUILD_NUMBER} - Check logs at ${BUILD_URL}console"
+                echo """
+                DEPLOYMENT FAILED
                 
-                // Collect failure information
+                Build: ${BUILD_NUMBER}
+                Git: ${GIT_BRANCH}@${GIT_COMMIT}
+                Console: ${BUILD_URL}console
+                Artifacts: ${BUILD_URL}artifact/
+                """
+                
+                // Collect failure diagnostics
                 sh '''
-                    echo "=== Failure Diagnostics ==="
-                    docker ps -a | grep ${CONTAINER_NAME} || echo "Container not found"
-                    docker logs ${CONTAINER_NAME} 2>/dev/null || echo "No container logs available"
+                    echo "=== FAILURE DIAGNOSTICS ==="
+                    docker ps -a | grep task-management || echo "No containers found"
+                    docker logs ${CONTAINER_NAME} --tail 20 || echo "No logs available"
                     docker images | grep ${DOCKER_IMAGE} || echo "No images found"
+                    netstat -tlnp | grep ${HOST_PORT} || echo "Port not in use"
                 '''
                 
                 // Cleanup failed deployment
-                sh '''
-                    docker rm -f ${CONTAINER_NAME} 2>/dev/null || true
-                '''
+                sh 'docker rm -f ${CONTAINER_NAME} || true'
             }
         }
         
