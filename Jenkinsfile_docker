@@ -33,8 +33,8 @@ pipeline {
         DOCKER_NETWORK = 'task-management-network'
         DOCKER_REGISTRY = 'localhost:5000'
         
-        // Git information
-        GIT_COMMIT = "${sh(returnStdout: true, script: 'git rev-parse --short HEAD').trim()}"
+        // Git information (will be set after checkout)
+        GIT_COMMIT = ''
         GIT_BRANCH = "${env.BRANCH_NAME ?: 'develop'}"
     }
     
@@ -59,6 +59,13 @@ pipeline {
                 // Clean workspace and checkout code
                 cleanWs()
                 checkout scm
+                
+                // Extract Git information after checkout
+                script {
+                    env.GIT_COMMIT = sh(returnStdout: true, script: 'git rev-parse --short HEAD').trim()
+                    echo "Git Commit: ${env.GIT_COMMIT}"
+                    echo "Git Branch: ${env.GIT_BRANCH}"
+                }
                 
                 // Validate project structure
                 sh '''
